@@ -28,7 +28,7 @@ export async function main(ns: NS): Promise<void> {
 
 	const rootedCount = reports.filter((r) => r.rooted).length;
 	const hackableCount = reports.filter((r) => r.score > 0).length;
-	ns.tprint(
+	ns.print(
 		`scan-root: ${rootedCount}/${reports.length} servers rooted, ${hackableCount} hackable at level ${hackingLevel}. Results written to /data/servers.json`,
 	);
 }

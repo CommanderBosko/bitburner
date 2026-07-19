@@ -8,6 +8,7 @@ const SECURITY_TOLERANCE = 5;
 const MONEY_THRESHOLD = 0.75;
 const LOOP_BUFFER_MS = 200;
 const NO_RAM_RETRY_MS = 5000;
+const RETARGET_INTERVAL_MS = 30000;
 
 function getTopTarget(ns: NS): ServerReport | null {
 	if (!ns.fileExists("/data/servers.json", "home")) return null;
@@ -34,15 +35,25 @@ function launch(ns: NS, script: string, target: string): number {
 }
 
 export async function main(ns: NS): Promise<void> {
-	const target = getTopTarget(ns);
+	let target = getTopTarget(ns);
 	if (!target) {
 		ns.tprint("controller: no rooted, hackable target found in /data/servers.json. Run scan-root.js first.");
 		return;
 	}
 
 	ns.tprint(`controller: targeting ${target.hostname}`);
+	let lastRetarget = Date.now();
 
 	while (true) {
+		if (Date.now() - lastRetarget >= RETARGET_INTERVAL_MS) {
+			lastRetarget = Date.now();
+			const candidate = getTopTarget(ns);
+			if (candidate && candidate.hostname !== target.hostname) {
+				ns.print(`controller: switching target ${target.hostname} -> ${candidate.hostname}`);
+				target = candidate;
+			}
+		}
+
 		const security = ns.getServerSecurityLevel(target.hostname);
 		const minSecurity = ns.getServerMinSecurityLevel(target.hostname);
 		const money = ns.getServerMoneyAvailable(target.hostname);
