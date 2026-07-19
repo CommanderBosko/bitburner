@@ -23,7 +23,11 @@ Runs `npm run watch` (TypeScript compiler in watch mode) and `npm run sync` (`bi
 - State (PID and log files) lives in `.dev-watch/` at the repo root, which is gitignored.
 - Processes are started with `nohup ... & disown`, so they survive the shell (or Claude Code tool call) that launched them exiting — but not a full logout or reboot.
 - Re-running `start` while a process is already alive (checked via `kill -0` on the recorded PID) is a safe no-op for that process.
-- **They will not appear in Claude Code's own "n watcher(s)" background-task indicator.** That indicator only tracks processes the harness itself launched via `run_in_background` (or the Task tools); `nohup ... & disown` deliberately detaches from that tracking so the processes survive independent of any one Claude Code session. This is the intended tradeoff, not a bug — use `.claude/skills/dev-watch/scripts/dev-watch.sh status` (or ask to check watcher status) to confirm they're alive instead of looking for the UI indicator.
+
+## Gotchas
+
+- **What went wrong:** after starting the watchers, the user checked for them via Claude Code's own "n watcher(s)" background-task indicator and saw nothing, even though both processes were genuinely alive — the indicator only tracks harness-launched (`run_in_background`) processes, not `nohup`/`disown`-detached ones.
+- **How to avoid it:** don't rely on that indicator for these processes; use `dev-watch status` (or ask to check watcher status) instead, and mention this distinction proactively when reporting a successful `start`.
 
 ## Scripts
 

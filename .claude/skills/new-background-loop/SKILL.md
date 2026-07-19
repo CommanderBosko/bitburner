@@ -60,6 +60,11 @@ Tell the user:
 - The `npm run build` result
 - A reminder that the `// TODO: <purpose>` line in the new script is just a starting point — the actual hack/buy/scan logic still needs to be written by hand.
 
+## Gotchas
+
+- **What went wrong:** `rescan-loop.ts` launched a sub-script with a bare `ns.run(SCRIPT)` and only checked for `0`/failure once, with no retry — when the RAM-blocked launch failed, it silently did nothing until the next loop interval, and `activate.ts` (which launches these loops' initial run too) hardcoded a success message regardless of what actually happened.
+- **How to avoid it:** if a scaffolded loop's body needs to launch another script via `ns.run()`, use `runWithRetry()` from `src/lib/launch.ts` instead of a bare call, and report actual launched/failed outcomes rather than assuming success.
+
 ## Scripts
 
 - `scripts/scaffold-loop.sh <name> <purpose> <interval-ms>` — Step 2's file templating and `activate.ts` wiring. Validates `<name>` is kebab-case and `<interval-ms>` is a positive integer, refuses to overwrite an existing `src/scripts/<name>.ts`, inserts the new `<NAME>_SCRIPT` constant after the last existing `*_SCRIPT` constant in `activate.ts`, and appends it to the `for (const script of [...])` array — then verifies both edits landed. Exits non-zero with a diagnostic message on any validation or structural-drift failure.
