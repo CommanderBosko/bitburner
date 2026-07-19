@@ -8,14 +8,17 @@ model: haiku
 
 Scaffold a new single-purpose Bitburner worker script under `src/scripts/` that wraps exactly one `ns` call, matching the shape of `hack.ts`/`grow.ts`/`weaken.ts`. (Bucket: Utility)
 
+## Arguments
+
+- **Script name** — kebab-case (e.g. `weaken-pct`). Becomes `src/scripts/<name>.ts`.
+- **`ns` method** — the single method to call (e.g. `hack`, `grow`, `weaken`, `share`).
+- **Target argument** — whether the method takes the target hostname as `ns.args[0]` (the standard `hack`/`grow`/`weaken` pattern) or no argument at all (e.g. `ns.share()`).
+
 ## Steps
 
-1. Ask the user for:
-   - (a) the script name in kebab-case (this becomes `src/scripts/<name>.ts`)
-   - (b) the single `ns` method to call (e.g. `hack`, `grow`, `weaken`, `share`, `weakenPct`, etc.)
-   - (c) whether the method takes the target hostname as `ns.args[0]` (the standard pattern used by `hack`/`grow`/`weaken`) or takes no argument at all (e.g. `ns.share()` takes no target)
+1. Ask the user for the script name (free-form) and the `ns` method (free-form). For the target-argument question, use the **AskUserQuestion** tool with two options — "Takes a target (ns.args[0])" and "No argument (e.g. ns.share())" — rather than free-form prose, since it's a binary choice.
 
-2. Before writing, read `src/scripts/hack.ts`, `src/scripts/grow.ts`, and `src/scripts/weaken.ts` in this repo to reconfirm the pattern hasn't drifted. As of writing, all three are byte-identical apart from the method name, and use **tab** indentation:
+2. Before writing, read `src/scripts/hack.ts`, `src/scripts/grow.ts`, and `src/scripts/weaken.ts` in this repo to reconfirm the pattern hasn't drifted from what `scripts/new-worker-script.sh` generates (see step 3). As of writing, all three are byte-identical apart from the method name, using **tab** indentation:
    ```ts
    import type { NS } from "../NetscriptDefinitions";
 
@@ -24,25 +27,13 @@ Scaffold a new single-purpose Bitburner worker script under `src/scripts/` that 
    	await ns.hack(target);
    }
    ```
+   If any of them has drifted from this shape, stop and tell the user — the script's template needs updating before proceeding, don't silently paper over it by hand-writing the new file differently.
 
-3. Create `src/scripts/<name>.ts` following that exact pattern, substituting the requested method:
-   ```ts
-   import type { NS } from "../NetscriptDefinitions";
-
-   export async function main(ns: NS): Promise<void> {
-   	const target = ns.args[0] as string;
-   	await ns.<method>(target);
-   }
+3. Run:
+   ```bash
+   scripts/new-worker-script.sh <name> <method> [--no-target]
    ```
-   If the method takes no target argument (per the user's answer to 1c), omit the `const target = ...` line and call the method with no arguments instead:
-   ```ts
-   import type { NS } from "../NetscriptDefinitions";
-
-   export async function main(ns: NS): Promise<void> {
-   	await ns.<method>();
-   }
-   ```
-   Use tab indentation to match the existing worker scripts.
+   (a plain relative path works — this is a project-local skill, so Claude's working directory is already the repo root). Pass `--no-target` only if the user picked "No argument" in step 1. The script refuses to overwrite an existing file and validates `<name>` is kebab-case; if it exits non-zero, relay its error and fix the underlying issue (rename, or pick a different method) before retrying.
 
 4. Do **not** attempt to auto-wire the new script into `src/scripts/controller.ts`. This is a deliberate, documented exception, not an oversight: `controller.ts`'s dispatch loop is a fixed 3-branch if/else (weaken → grow → hack) implementing one specific strategy decision tree (security-down → money-up → hack), not an open-ended launch list like `activate.ts`'s `for (const script of [...])` array. Forcing a 4th branch into `controller.ts` without knowing the intended trigger condition (when should this new script run instead of one of the other three?) would just be guessing wrong.
 
@@ -55,3 +46,7 @@ Scaffold a new single-purpose Bitburner worker script under `src/scripts/` that 
    - The new file path (`src/scripts/<name>.ts`)
    - The build result (pass/fail; if it failed, include the `tsc` error output)
    - The controller.ts note from step 4
+
+## Scripts
+
+- `scripts/new-worker-script.sh <name> <method> [--no-target]` — Step 3's file generation. Validates `<name>` is kebab-case, refuses to overwrite an existing `src/scripts/<name>.ts`, and writes the with-target or no-target template (tab-indented, matching `hack.ts`/`grow.ts`/`weaken.ts`) depending on `--no-target`. Exits non-zero with a diagnostic message on validation failure or an existing file.
