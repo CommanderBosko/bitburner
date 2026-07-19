@@ -10,6 +10,10 @@ Check whether a newly-created/unlocked Bitburner program needs a corresponding c
 
 Some program unlocks (BruteSSH.exe, FTPCrack.exe, relaySMTP.exe, HTTPWorm.exe, SQLInject.exe) map to an `ns.*` function this repo's scripts should call; others (AutoLink.exe, DeepscanV1.exe, ServerProfiler.exe) are terminal-only QoL features with no Netscript API surface and need no code change. This distinction isn't obvious from the unlock notification alone — it has to be checked in `NetscriptDefinitions.d.ts` each time.
 
+## Arguments
+
+- **Program name** — the `.exe` that was just unlocked (e.g. `ServerProfiler.exe`). Required; if given without `.exe`, confirm or infer it.
+
 ## Steps
 
 1. Get the program name from the user (e.g. `ServerProfiler.exe`). If they only gave a bare name without `.exe`, ask for confirmation or infer it if unambiguous.

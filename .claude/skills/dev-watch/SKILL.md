@@ -8,6 +8,10 @@ model: haiku
 
 Runs `npm run watch` (TypeScript compiler in watch mode) and `npm run sync` (`bitburner-filesync`, pushing `dist/` into the running game) as detached background processes, so the user doesn't need two dedicated terminal windows for the project's normal edit loop. (Bucket: Utility)
 
+## Arguments
+
+- **Action** — `start` (default), `stop`, or `status`. Inferred from what the user asked for; not always stated explicitly.
+
 ## Steps
 
 1. Determine the action: `start` (default, if the user just says "start watchers" or similar), `stop`, or `status`, based on what the user asked for.

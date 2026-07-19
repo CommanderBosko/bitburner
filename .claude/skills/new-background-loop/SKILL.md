@@ -8,6 +8,12 @@ model: haiku
 
 Scaffold a new persistent Bitburner background-loop script and auto-wire it into `activate.ts`'s launch list. (Bucket: Utility)
 
+## Arguments
+
+- **Script name** — kebab-case (e.g. `stock-trader`). Required.
+- **Purpose** — one-sentence description of what the loop does. Required.
+- **Loop interval in milliseconds** — no repo-wide default (`hacknet-manager.ts` uses `10000`, `rescan-loop.ts` uses `30000`); always ask, never assume. Required.
+
 ## Steps
 
 ### 1. Gather the script spec
