@@ -29,13 +29,29 @@ Editing a `.ts` file under `src/scripts/` recompiles and auto-pushes it into the
 
 `npm run build` does a one-shot compile if you don't need the watcher.
 
+Alternatively, if you're using Claude Code on this repo, ask it to "start watchers" — the `dev-watch` skill runs `watch`/`sync` as detached background processes so you don't need two dedicated terminal windows.
+
+In-game, `run scripts/activate.js` launches the full automation stack: `scan-root` (recon + root access), then `controller` (weaken/grow/hack dispatch), `hacknet-manager` (auto-purchases upgrades), and `rescan-loop` (re-targets every 30s).
+
 ## Structure
 
 - `src/scripts/` — entry-point scripts, each with an exported `async function main(ns: NS)`
-- `src/lib/` — shared helper modules imported by scripts
+  - `activate.ts` — launches the full automation stack (see Usage)
+  - `scan-root.ts` / `controller.ts` / `hacknet-manager.ts` / `rescan-loop.ts` — the persistent automation loop
+  - `hack.ts` / `grow.ts` / `weaken.ts` — minimal single-`ns`-call worker scripts dispatched by `controller.ts`
+- `src/lib/` — shared helper modules imported by scripts (recon/root helpers, a RAM-blocked-launch retry helper)
 - `src/NetscriptDefinitions.d.ts` — official Netscript API type definitions (not hand-edited; re-fetch from upstream if it drifts from the game's current API)
 - `dist/` — build output; what `bitburner-filesync` actually syncs into the game
 - `filesync.json` — `bitburner-filesync` configuration
+- `.claude/skills/` — project-local Claude Code skills for this repo's own dev workflow (scaffolding new scripts, RAM auditing, checking program unlocks, running the dev watchers) — see `project-state.md` for the current list
+
+## Recent Changes
+
+- Core automation loop (`scan-root` → `controller` → `hacknet-manager`, periodic re-targeting via `rescan-loop`) built out and wired through `activate.ts`.
+- `activate.ts`'s script launches now retry on RAM-blocked failures and report actual launched/failed scripts instead of a hardcoded success message.
+- Added a set of project-local Claude Code skills covering this repo's dev workflow (`activate-check`, `check-unlock`, `dev-watch`, `new-background-loop`, `new-worker-script`, `ram-audit`), all verified clean via a full skill-audit sweep.
+
+See `project-state.md` for current status, decisions, and known issues in more detail.
 
 ## License
 
