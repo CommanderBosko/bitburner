@@ -3,6 +3,10 @@
 #
 # Usage: scaffold-loop.sh <kebab-case-name> <purpose> <interval-ms>
 set -euo pipefail
+# bash >=5.2 defaults patsub_replacement on, which makes an unescaped `&` in a
+# ${var//pat/repl} replacement expand to the matched text (sed-like). Turn it
+# off so a PURPOSE containing "&" substitutes literally instead of corrupting.
+shopt -u patsub_replacement 2>/dev/null || true
 
 NAME="${1:?Usage: scaffold-loop.sh <kebab-case-name> <purpose> <interval-ms>}"
 PURPOSE="${2:?Usage: scaffold-loop.sh <kebab-case-name> <purpose> <interval-ms>}"
@@ -21,6 +25,13 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 TS_FILE="$REPO_ROOT/src/scripts/${NAME}.ts"
 ACTIVATE_FILE="$REPO_ROOT/src/scripts/activate.ts"
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEMPLATE_FILE="$SKILL_DIR/assets/loop-template.ts"
+
+if [[ ! -f "$TEMPLATE_FILE" ]]; then
+	echo "ERROR: $TEMPLATE_FILE not found - skill assets may have drifted" >&2
+	exit 1
+fi
 
 if [[ -e "$TS_FILE" ]]; then
 	echo "ERROR: $TS_FILE already exists - refusing to overwrite" >&2
@@ -36,9 +47,14 @@ UPPER_SNAKE="$(printf '%s' "$NAME" | tr '-' '_' | tr '[:lower:]' '[:upper:]')"
 INTERVAL_CONST="${UPPER_SNAKE}_INTERVAL_MS"
 SCRIPT_CONST="${UPPER_SNAKE}_SCRIPT"
 
-# --- write the script file (printf, not a heredoc, so PURPOSE can't inject shell syntax) ---
-printf 'import type { NS } from "../NetscriptDefinitions";\n\nconst %s = %s;\n\nexport async function main(ns: NS): Promise<void> {\n\tns.print("%s: starting");\n\n\twhile (true) {\n\t\t// TODO: %s\n\t\tawait ns.sleep(%s);\n\t}\n}\n' \
-	"$INTERVAL_CONST" "$INTERVAL" "$NAME" "$PURPOSE" "$INTERVAL_CONST" > "$TS_FILE"
+# --- write the script file from the template (bash pattern substitution, not sed/eval,
+#     so PURPOSE can't inject shell syntax or trip on sed metacharacters like & and /) ---
+RENDERED="$(cat "$TEMPLATE_FILE")"
+RENDERED="${RENDERED//__INTERVAL_CONST__/$INTERVAL_CONST}"
+RENDERED="${RENDERED//__INTERVAL_MS__/$INTERVAL}"
+RENDERED="${RENDERED//__NAME__/$NAME}"
+RENDERED="${RENDERED//__PURPOSE__/$PURPOSE}"
+printf '%s\n' "$RENDERED" > "$TS_FILE"
 
 echo "Created $TS_FILE"
 

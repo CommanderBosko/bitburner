@@ -33,22 +33,7 @@ scripts/scaffold-loop.sh <name> <purpose> <interval-ms>
 ```
 (a plain relative path works — this is a project-local skill, so Claude's working directory is already the repo root)
 
-This creates `src/scripts/<name>.ts` following the established loop pattern:
-```ts
-import type { NS } from "../NetscriptDefinitions";
-
-const <NAME>_INTERVAL_MS = <interval>;
-
-export async function main(ns: NS): Promise<void> {
-	ns.print("<name>: starting");
-
-	while (true) {
-		// TODO: <purpose>
-		await ns.sleep(<NAME>_INTERVAL_MS);
-	}
-}
-```
-and wires it into `src/scripts/activate.ts` by adding a `<NAME>_SCRIPT = "scripts/<name>.js";` constant (after the last existing `*_SCRIPT` constant) and appending that constant to the `for (const script of [...])` launch array.
+This creates `src/scripts/<name>.ts` from `assets/loop-template.ts` (the single source of truth for the loop shape — don't re-type the template by hand, and if the pattern needs to change, edit that asset rather than hand-editing a generated file) and wires it into `src/scripts/activate.ts` by adding a `<NAME>_SCRIPT = "scripts/<name>.js";` constant (after the last existing `*_SCRIPT` constant) and appending that constant to the `for (const script of [...])` launch array.
 
 **Critical convention — never regress this:** the script body uses `ns.print`, NEVER `ns.tprint`. Every persistent loop script in this repo (`hacknet-manager.ts`, `rescan-loop.ts`, and `scan-root.ts` once it started being rerun periodically) had its status/log output moved to `ns.print` specifically because `ns.tprint` floods the in-game terminal when a script logs on every iteration. `ns.tprint` is reserved for genuinely one-shot scripts (like `activate.ts`'s own final summary line). The scaffold script already follows this rule — if you ever hand-edit the generated file, preserve it.
 
@@ -73,4 +58,8 @@ Tell the user:
 
 ## Scripts
 
-- `scripts/scaffold-loop.sh <name> <purpose> <interval-ms>` — Step 2's file templating and `activate.ts` wiring. Validates `<name>` is kebab-case and `<interval-ms>` is a positive integer, refuses to overwrite an existing `src/scripts/<name>.ts`, inserts the new `<NAME>_SCRIPT` constant after the last existing `*_SCRIPT` constant in `activate.ts`, and appends it to the `for (const script of [...])` array — then verifies both edits landed. Exits non-zero with a diagnostic message on any validation or structural-drift failure.
+- `scripts/scaffold-loop.sh <name> <purpose> <interval-ms>` — Step 2's file templating and `activate.ts` wiring. Validates `<name>` is kebab-case and `<interval-ms>` is a positive integer, refuses to overwrite an existing `src/scripts/<name>.ts`, renders `assets/loop-template.ts` by substituting its `__NAME__`/`__PURPOSE__`/`__INTERVAL_MS__`/`__INTERVAL_CONST__` placeholders, inserts the new `<NAME>_SCRIPT` constant after the last existing `*_SCRIPT` constant in `activate.ts`, and appends it to the `for (const script of [...])` array — then verifies both edits landed. Exits non-zero with a diagnostic message on any validation or structural-drift failure.
+
+## Assets
+
+- `assets/loop-template.ts` — the loop-script template, with `__NAME__`, `__PURPOSE__`, `__INTERVAL_MS__`, and `__INTERVAL_CONST__` placeholder tokens. Read and substituted by `scripts/scaffold-loop.sh`; edit this file (not the script's substitution logic) if the loop shape itself needs to change.
