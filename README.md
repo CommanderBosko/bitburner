@@ -31,15 +31,16 @@ Editing a `.ts` file under `src/scripts/` recompiles and auto-pushes it into the
 
 Alternatively, if you're using Claude Code on this repo, ask it to "start watchers" — the `dev-watch` skill runs `watch`/`sync` as detached background processes so you don't need two dedicated terminal windows.
 
-In-game, typing `run scripts/scan-root.js` directly at the terminal boots the full automation stack — there's no separate launcher script. `scan-root` (recon + root access) launches `controller` (weaken/grow/hack dispatch) when done, which launches `hacknet-manager` (auto-purchases upgrades), which launches `rescan-loop` (re-runs `scan-root` every 30s to keep retargeting the top-payout server). Each script launches the next itself, so nothing stays resident just to sequence the launch — see `project-state.md` for why that matters on a RAM-constrained `home` server.
+In-game, typing `run scripts/scan-root.js` directly at the terminal boots the full automation stack — there's no separate launcher script. `scan-root` (recon + root access) launches `controller` (weaken/grow/hack dispatch) when done, which launches `hacknet-manager` (auto-purchases upgrades), which launches `rescan-loop` (re-runs `scan-root` every 30s to keep retargeting the top-payout server), which launches `backdoor-loop` (auto-installs a backdoor on every rooted host once Source-File 4 makes that possible). Each script launches the next itself, so nothing stays resident just to sequence the launch — see `project-state.md` for why that matters on a RAM-constrained `home` server.
 
 ## Structure
 
 - `src/scripts/` — entry-point scripts, each with an exported `async function main(ns: NS)`
   - `scan-root.ts` — the chain's entrypoint (see Usage); also launches `controller.ts` once recon/root is done
-  - `controller.ts` / `hacknet-manager.ts` / `rescan-loop.ts` — the rest of the persistent automation chain, each launching the next
+  - `controller.ts` / `hacknet-manager.ts` / `rescan-loop.ts` / `backdoor-loop.ts` — the rest of the persistent automation chain, each launching the next
   - `hack.ts` / `grow.ts` / `weaken.ts` — minimal single-`ns`-call worker scripts dispatched by `controller.ts`
-- `src/lib/` — shared helper modules imported by scripts (recon/root helpers, a RAM-blocked-launch retry helper)
+  - `server-tree.ts` / `connect-to.ts` — standalone manual-use scripts (print a root-status tree of the network; connect to any discovered host by name)
+- `src/lib/` — shared helper modules imported by scripts: recon helpers (`network.ts`), root-access logic (`root.ts`), a RAM-blocked-launch retry helper (`launch.ts`)
 - `src/NetscriptDefinitions.d.ts` — official Netscript API type definitions (not hand-edited; re-fetch from upstream if it drifts from the game's current API)
 - `dist/` — build output; what `bitburner-filesync` actually syncs into the game
 - `filesync.json` — `bitburner-filesync` configuration
@@ -47,7 +48,10 @@ In-game, typing `run scripts/scan-root.js` directly at the terminal boots the fu
 
 ## Recent Changes
 
-- Replaced the `activate.ts` launcher with a self-assembling chain (`scan-root` → `controller` → `hacknet-manager` → `rescan-loop`, each launching the next) — a standalone orchestrator staying resident through the whole launch sequence was stacking RAM cost on top of every already-launched persistent script, which could exceed a small fresh-reset `home`'s RAM outright.
+- Added `backdoor-loop.ts` to the end of the chain and split root-access logic out of `network.ts` into its own `lib/root.ts` module. `backdoor-loop.ts` uses `ns.singularity.connect`/`installBackdoor`, which — like the rest of the Singularity API — requires Source-File 4 to use outside BitNode 4; the loop catches that error and backs off rather than crashing.
+- Added `server-tree.ts` (read-only network tree view) and `connect-to.ts` (connect to any discovered host by name via `ns.singularity.connect`) as standalone manual-use scripts.
+- Scoped a request to automate faction-reputation grinding and augmentation purchasing, then shelved it before writing code: the entire `ns.singularity.*` API (faction work, augment purchase, TOR/program purchase, etc.) hard-errors outside BitNode 4 without Source-File 4, which this save doesn't have yet. Revisit once BitNode 4 is completed.
+- Replaced the `activate.ts` launcher with a self-assembling chain (`scan-root` → `controller` → `hacknet-manager` → `rescan-loop` → `backdoor-loop`, each launching the next) — a standalone orchestrator staying resident through the whole launch sequence was stacking RAM cost on top of every already-launched persistent script, which could exceed a small fresh-reset `home`'s RAM outright.
 - Found and fixed two confirmed bugs in **Bitburner's own static RAM analyzer**, where it charges a large phantom cost unrelated to a script's real `ns.*` usage: calling an `ns.*` function indirectly through a closure stored in an object/array, and use of the `??` operator. Every chain script's RAM cost is now verified accurate via in-game `mem`.
 - Added a set of project-local Claude Code skills covering this repo's dev workflow (`activate-check`, `check-unlock`, `dev-watch`, `new-background-loop`, `new-worker-script`, `ram-audit`, `ns-cost-lookup`).
 

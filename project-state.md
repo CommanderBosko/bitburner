@@ -1,19 +1,21 @@
 # Project State
 
-_Last updated: 2026-07-19_
+_Last updated: 2026-07-20_
 
 ## Current Project State
 
 **Core automation — live and working, now a self-assembling chain (no `activate.ts`):**
 - Entrypoint is typing `run scan-root.js` directly at the in-game terminal — not a wrapper script. A script whose only job is one `ns.run()` call costs ~2.6GB (1.6GB base + 1.0GB for `run`) for zero benefit, since the terminal itself is free.
-- `scan-root.ts` (recon + root, writes `/data/servers.json`) launches `controller.ts` (weaken → grow → hack dispatch loop) when done, guarded by `ns.isRunning` so the periodic re-scan doesn't relaunch it. `controller.ts` launches `hacknet-manager.ts` (auto-purchases hacknet upgrades by payback period) at the top of its own `main()`, before its own work. `hacknet-manager.ts` launches `rescan-loop.ts` (re-runs `scan-root.js` every 30s so `controller` always retargets the top-payout server) the same way. Each script carries the baton to the next and either exits (`scan-root.ts`) or settles into its own persistent loop — no single orchestrator stays resident through the whole sequence.
-- The current chain tail is marked with a `// CHAIN-TAIL` comment (currently in `rescan-loop.ts`) so `new-background-loop` knows where to wire in the next scaffolded script.
+- `scan-root.ts` (recon + root, writes `/data/servers.json`) launches `controller.ts` (weaken → grow → hack dispatch loop) when done, guarded by `ns.isRunning` so the periodic re-scan doesn't relaunch it. `controller.ts` launches `hacknet-manager.ts` (auto-purchases hacknet upgrades by payback period) at the top of its own `main()`, before its own work. `hacknet-manager.ts` launches `rescan-loop.ts` (re-runs `scan-root.js` every 30s so `controller` always retargets the top-payout server) the same way. `rescan-loop.ts` launches `backdoor-loop.ts` (walks every rooted host and installs a backdoor via `ns.singularity.connect`/`installBackdoor` if not already backdoored) the same way. Each script carries the baton to the next and either exits (`scan-root.ts`) or settles into its own persistent loop — no single orchestrator stays resident through the whole sequence.
+- The current chain tail is marked with a `// CHAIN-TAIL` comment (currently in `backdoor-loop.ts`) so `new-background-loop` knows where to wire in the next scaffolded script.
 - Worker scripts `hack.ts`/`grow.ts`/`weaken.ts` are minimal, byte-identical single-`ns`-call scripts, dispatched by `controller.ts` via `ns.exec`.
-- `src/lib/network.ts` holds recon/root-access helpers (port-openers now called directly, not through a closure array — see Recent Decisions). `src/lib/launch.ts` holds `runWithRetry()`, the shared retry-on-RAM-block launcher used throughout the chain.
+- `src/lib/network.ts` holds recon (scan/parent-map) helpers only now; root-access logic (`tryRoot`) moved to its own `src/lib/root.ts` module. `src/lib/launch.ts` holds `runWithRetry()`, the shared retry-on-RAM-block launcher used throughout the chain.
+- Standalone (non-chain) scripts for manual use: `server-tree.ts` (prints a read-only root-status/required-hacking-level tree of the discovered network) and `connect-to.ts` (walks `ns.singularity.connect()` hop-by-hop to reach any discovered host by name).
 - Dev loop: `npm run watch` (`tsc -w`) + `npm run sync` (`bitburner-filesync`) run as detached background processes via the `dev-watch` skill — currently running.
 
 **Real, verified RAM cost per chain script (via in-game `mem <script>`, not estimated):**
-`scan-root.js` 3.80GB · `controller.js` 4.85GB · `hacknet-manager.js` 8.70GB · `rescan-loop.js` 2.70GB. Steady-state once fully booted (`controller` + `hacknet-manager` + `rescan-loop` all persistent) ≈ **16.25GB**; `scan-root.js` only blips back in briefly every 30s via `rescan-loop.js`, then exits.
+`scan-root.js` 3.80GB · `controller.js` 4.85GB · `hacknet-manager.js` 8.70GB · `rescan-loop.js` 2.70GB. Steady-state for those four once fully booted ≈ **16.25GB**; `scan-root.js` only blips back in briefly every 30s via `rescan-loop.js`, then exits.
+- `backdoor-loop.js`'s real cost is **not yet verified in-game** and is expected to be large: it calls `ns.singularity.connect` (confirmed 32GB per call site, see `ram-costs.json`) and `ns.singularity.installBackdoor` (cost unconfirmed). Both are Singularity functions and therefore also **hard-locked to throw at runtime unless Source-File 4 is owned** (true outside BitNode 4) — the script's loop already anticipates this, catching the error and backing off to a 5-minute retry interval (`SINGULARITY_UNAVAILABLE_RETRY_MS`) instead of crashing or spamming. Until SF4 is owned, `backdoor-loop.js` is effectively a no-op that just idles/retries — see Known Issues.
 
 **Tooling — 7 project-local Claude Code skills:**
 - `activate-check` — now walks the chain-launch graph from `scan-root.ts` (BFS via `// scripts/....js` references) instead of a single launch-list file; confirms every reachable script exists and flags unwired background-loops.
@@ -27,12 +29,15 @@ _Last updated: 2026-07-19_
 ## Current Goals
 
 **Short-term (next 1-3 sessions):**
-- Watch `home` RAM against the real ~16.25GB steady-state chain cost, especially right after a reset when `home` RAM is at its smallest — this is a real, now-accurately-known constraint, not a phantom one.
+- Watch `home` RAM against the real ~16.25GB steady-state chain cost, especially right after a reset when `home` RAM is at its smallest — this is a real, now-accurately-known constraint, not a phantom one. `backdoor-loop.js` adds an unverified but likely large amount on top once SF4 is owned (see Known Issues).
+- Verify `backdoor-loop.js`'s real RAM cost via in-game `mem` once feasible, same as the other four chain scripts.
 - Expand `controller.ts`'s dispatch logic and/or add new persistent automation (e.g. stock trading, server purchases) as background loops via `new-background-loop`.
+- **Do not scope any script that calls `ns.singularity.*`** (faction work/reputation, augmentation purchase, TOR router purchase, darkweb program purchase, company work, etc.) — confirmed 2026-07-20 that the entire Singularity API hard-errors outside BitNode 4 without Source-File 4, which this save doesn't have yet. All augment/faction/TOR/program automation stays manual-only until then.
 
 **Long-term:**
 - As new programs unlock, use `check-unlock` to keep `NetscriptDefinitions.d.ts` wiring current and progression memory accurate.
 - If a new Bitburner RAM-analyzer phantom-charge trigger is ever found, add it to `ram-audit`'s `extractRiskFlags()` and the "Known false negatives" section of its `SKILL.md` (only two are documented so far — the list is known to be incomplete).
+- Push toward completing BitNode 4 (reach $250b+ and hack `w0r1d_d43m0n` — same completion mechanic as BitNode 1) to unlock Source-File 4. That's the actual prerequisite for the entire category of Singularity-based automation (faction rep grinding, augment purchasing, TOR/program purchasing) — worth prioritizing once BN1 is done specifically because it unblocks so much future scripting.
 
 ## Recent Decisions
 
@@ -40,17 +45,22 @@ _Last updated: 2026-07-19_
 - **Root-caused a second, more fundamental problem after the chain redesign: Bitburner's own static RAM analyzer has confirmed bugs.** It emits a large phantom charge (`10GB | codingcontract.attempt`) completely unrelated to a script's real `ns.*` usage, in two confirmed cases: (1) an `ns.*` call made indirectly through a closure stored in an object/array (`{ run: (ns, host) => ns.brutessh(host) }`, invoked as `opener.run(...)`) — fixed in `lib/network.ts`'s `tryRoot` and `hacknet-manager.ts`'s `Purchase.apply`; (2) the `??` (nullish-coalescing) operator, which alone triggered the same charge in an otherwise-clean file — fixed in `controller.ts`. This was found via live `mem <script>` bisection, not by reading code — a script can look cheap by inspection and still get charged 10GB+ for something it never calls. Comments mentioning `ns.*` names do **not** trigger this — confirmed the analyzer ignores comments.
 - **`ram-audit` now warns (⚠) about both confirmed phantom-charge triggers** rather than silently under-reporting. Its core premise ("static cost = accurate sum") had to be caveated: true for well-behaved code, not guaranteed against the game's own engine bugs.
 - **Built `ns-cost-lookup`** instead of continuing to look up RAM costs by hand — the manual `grep`/`sed` line-offset approach had misfired repeatedly this session (wrong overload, wrong window, a function's real cost missed entirely) and across every prior session transcript for this project (confirmed via grep). The new tool properly resolves the `NS`-interface (or sub-interface) signature and its doc comment; verified against every ground-truth cost confirmed via `mem` this session, and it caught a cost I'd misread by hand (`print()` does have `RAM cost: 0 GB` documented — I'd read too narrow a window and concluded it didn't).
+- **Split `tryRoot` out of `network.ts` into its own `lib/root.ts` module**, and added `backdoor-loop.ts` to the end of the chain (after `rescan-loop.ts`) to auto-backdoor every rooted host once SF4 makes that possible.
+- **Scoped (via `/interview`) a request to automate faction reputation grinding and augmentation purchasing, then shelved it before writing any code.** Checked `NetscriptDefinitions.d.ts` directly rather than assuming: the entire `Singularity` interface — `workForFaction`, `purchaseAugmentation`, `getAugmentationsFromFaction`, `getFactionRep`, `purchaseTor`, `purchaseProgram`, etc. — carries a hard requirement of Source-File 4 to use outside BitNode 4 (not just an expensive RAM multiplier; it throws at runtime). This save has zero Source-Files, so the feature is currently unbuildable. Decision: pivoted to giving manual in-game-UI strategy advice instead of writing dead code, and recorded the finding in memory (`bitburner_singularity_locked`) so it isn't re-discovered from scratch next time this comes up.
 
 ## Known Issues / Tech Debt
 
-- **`home` RAM is a real, tight constraint at ~16.25GB steady-state** for the four chain scripts — this figure is now trustworthy (verified via `mem`, not estimated), unlike earlier in the project when RAM estimates were unknowingly inflated by the analyzer bugs above. No further persistent script can join the chain without a `home` RAM upgrade or trimming an existing script's real cost.
+- **`home` RAM is a real, tight constraint at ~16.25GB steady-state** for the four fully-verified chain scripts — this figure is now trustworthy (verified via `mem`, not estimated), unlike earlier in the project when RAM estimates were unknowingly inflated by the analyzer bugs above. No further persistent script can join the chain without a `home` RAM upgrade or trimming an existing script's real cost. `backdoor-loop.js` (5th chain script) is not yet included in this figure — see Current Project State.
 - **The RAM-analyzer phantom-charge trigger list (2 items) is almost certainly incomplete.** It reflects exactly what's been hit and confirmed in this repo, not a general survey of the game's analyzer. Treat an implausibly-high `mem` result on a new script as a signal to search for a new triggering shape, not just accept it.
+- **The entire `ns.singularity.*` API is unusable in this save until Source-File 4 is owned** (requires completing BitNode 4 first — see Current Goals). This blocks: faction reputation grinding, augmentation purchasing, TOR router purchasing, darkweb program purchasing, and the `connect`/`installBackdoor` calls already written into `backdoor-loop.ts`/`connect-to.ts` (both already catch/tolerate the resulting error rather than crash). Don't propose Singularity-based automation until SF4 is confirmed owned.
 - `check-unlock`'s memory-file path is a hardcoded absolute path (machine/session-specific). Low priority; not fixed.
 - `dev-watch` hardcodes the npm script names `"watch"`/`"sync"` in two places (script + prose); low priority, not worth a shared-config split for a pair this small.
 
 ## Next Steps
 
-- Try the chain end-to-end after any future `home` RAM change (`run scan-root.js` at the terminal) and confirm it still boots cleanly.
+- Try the chain end-to-end after any future `home` RAM change (`run scan-root.js` at the terminal) and confirm it still boots cleanly, including the new `backdoor-loop.js` tail.
+- Verify `backdoor-loop.js`'s real RAM cost via in-game `mem` and fold it into the steady-state total.
 - Next program unlock → run `check-unlock`.
 - Next persistent automation idea → run `new-background-loop` (wires onto the chain tail automatically).
 - New `ns.*` RAM cost needed → run `ns-cost-lookup` instead of a manual grep.
+- Once BitNode 4 is completed and SF4 is owned: revisit the faction-reputation/augmentation-buying automation shelved this session — brief already scoped (cheapest-first buying with a percentage cash floor, manual install, joined-factions-only scope, best-available work type per faction, NeuroFlux Governor bought last).
