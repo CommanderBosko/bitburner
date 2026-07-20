@@ -59,7 +59,7 @@ export async function main(ns: NS): Promise<void> {
 		return;
 	}
 
-	ns.tprint(`controller: targeting ${target.hostname}`);
+	ns.tprint(`Now attacking ${target.hostname}!`);
 	let lastRetarget = Date.now();
 
 	while (true) {
@@ -67,7 +67,7 @@ export async function main(ns: NS): Promise<void> {
 			lastRetarget = Date.now();
 			const candidate = getTopTarget(ns);
 			if (candidate && candidate.hostname !== target.hostname) {
-				ns.print(`controller: switching target ${target.hostname} -> ${candidate.hostname}`);
+				ns.tprint(`Now attacking ${candidate.hostname}!`);
 				target = candidate;
 			}
 		}
