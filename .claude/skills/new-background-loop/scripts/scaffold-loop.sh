@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Scaffold a new Bitburner background-loop script and wire it into activate.ts.
+# Scaffold a new Bitburner background-loop script and wire it onto the end of
+# the chain-launch boot sequence (scan-root.ts -> controller.ts ->
+# hacknet-manager.ts -> ... -> whichever script currently owns the
+# "// CHAIN-TAIL" marker).
 #
 # Usage: scaffold-loop.sh <kebab-case-name> <purpose> <interval-ms>
 set -euo pipefail
@@ -24,7 +27,7 @@ fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 TS_FILE="$REPO_ROOT/src/scripts/${NAME}.ts"
-ACTIVATE_FILE="$REPO_ROOT/src/scripts/activate.ts"
+SRC_SCRIPTS_DIR="$REPO_ROOT/src/scripts"
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE_FILE="$SKILL_DIR/assets/loop-template.ts"
 
@@ -38,10 +41,23 @@ if [[ -e "$TS_FILE" ]]; then
 	exit 1
 fi
 
-if [[ ! -f "$ACTIVATE_FILE" ]]; then
-	echo "ERROR: $ACTIVATE_FILE not found - repo structure may have drifted" >&2
+# --- find the current chain tail: the one script whose main() carries the
+#     "// CHAIN-TAIL" marker right before its while(true) loop ---
+mapfile -t TAIL_MATCHES < <(grep -l '// CHAIN-TAIL' "$SRC_SCRIPTS_DIR"/*.ts 2>/dev/null || true)
+
+if [[ "${#TAIL_MATCHES[@]}" -eq 0 ]]; then
+	echo "ERROR: no '// CHAIN-TAIL' marker found under src/scripts/*.ts - chain wiring point unknown" >&2
+	echo "        (repo structure may have drifted - wire the new script in by hand)" >&2
 	exit 1
 fi
+if [[ "${#TAIL_MATCHES[@]}" -gt 1 ]]; then
+	echo "ERROR: multiple '// CHAIN-TAIL' markers found - chain structure has drifted:" >&2
+	printf '  %s\n' "${TAIL_MATCHES[@]}" >&2
+	echo "        (leave exactly one marker, on the current last script in the chain)" >&2
+	exit 1
+fi
+TAIL_FILE="${TAIL_MATCHES[0]}"
+TAIL_NAME="$(basename "$TAIL_FILE" .ts)"
 
 UPPER_SNAKE="$(printf '%s' "$NAME" | tr '-' '_' | tr '[:lower:]' '[:upper:]')"
 INTERVAL_CONST="${UPPER_SNAKE}_INTERVAL_MS"
@@ -56,36 +72,62 @@ RENDERED="${RENDERED//__NAME__/$NAME}"
 RENDERED="${RENDERED//__PURPOSE__/$PURPOSE}"
 printf '%s\n' "$RENDERED" > "$TS_FILE"
 
-echo "Created $TS_FILE"
+echo "Created $TS_FILE (now the chain tail)"
 
-# --- wire into activate.ts ---
+# --- wire the old tail into launching the new script ---
 
-# 1. Insert the new *_SCRIPT constant after the last existing one, so repeated
-#    invocations of this skill keep stacking cleanly.
-LAST_CONST_LINE="$(grep -n '^const [A-Z_]*_SCRIPT = "scripts/' "$ACTIVATE_FILE" | tail -1 | cut -d: -f1)"
-if [[ -z "$LAST_CONST_LINE" ]]; then
-	echo "ERROR: couldn't find an existing *_SCRIPT constant in $ACTIVATE_FILE to anchor the insertion" >&2
-	echo "        (created $TS_FILE but activate.ts was NOT wired - wire it by hand)" >&2
-	exit 1
-fi
-sed -i "${LAST_CONST_LINE}a const ${SCRIPT_CONST} = \"scripts/${NAME}.js\";" "$ACTIVATE_FILE"
-
-# 2. Append the new constant into the `for (const script of [...])` launch array.
-if ! grep -q 'for (const script of \[' "$ACTIVATE_FILE"; then
-	echo "ERROR: couldn't find 'for (const script of [...])' in $ACTIVATE_FILE" >&2
-	echo "        (created $TS_FILE and added the ${SCRIPT_CONST} constant, but the launch array was NOT updated - wire it by hand)" >&2
-	exit 1
-fi
-sed -i "s/\(for (const script of \[[^]]*\)\]/\1, ${SCRIPT_CONST}]/" "$ACTIVATE_FILE"
-
-# Verify both edits actually landed.
-if ! grep -q "^const ${SCRIPT_CONST} = \"scripts/${NAME}.js\";" "$ACTIVATE_FILE"; then
-	echo "ERROR: constant insertion did not verify - inspect $ACTIVATE_FILE by hand" >&2
-	exit 1
-fi
-if ! grep -q "for (const script of \[.*${SCRIPT_CONST}" "$ACTIVATE_FILE"; then
-	echo "ERROR: launch-array insertion did not verify - inspect $ACTIVATE_FILE by hand" >&2
-	exit 1
+# 1. Make sure the old tail imports runWithRetry.
+if ! grep -q '^import { runWithRetry } from "\.\./lib/launch";$' "$TAIL_FILE"; then
+	sed -i '/^import type { NS }/a import { runWithRetry } from "../lib/launch";' "$TAIL_FILE"
 fi
 
-echo "Wired ${SCRIPT_CONST} into $ACTIVATE_FILE (constant + launch array)"
+# 2. Insert the new *_SCRIPT constant, plus the shared retry constants if this
+#    file doesn't already have them (some tail scripts, e.g. rescan-loop.ts,
+#    already declare LAUNCH_RETRY_ATTEMPTS/LAUNCH_RETRY_DELAY_MS for their own
+#    use - reuse those instead of redeclaring).
+CONST_BLOCK="const ${SCRIPT_CONST} = \"scripts/${NAME}.js\";"
+if ! grep -q '^const LAUNCH_RETRY_ATTEMPTS = ' "$TAIL_FILE"; then
+	CONST_BLOCK="${CONST_BLOCK}
+const LAUNCH_RETRY_ATTEMPTS = 5;
+const LAUNCH_RETRY_DELAY_MS = 3000;"
+fi
+MAIN_LINE="$(grep -n '^export async function main' "$TAIL_FILE" | head -1 | cut -d: -f1)"
+if [[ -z "$MAIN_LINE" ]]; then
+	echo "ERROR: couldn't find 'export async function main' in $TAIL_FILE" >&2
+	echo "        (created $TS_FILE but $TAIL_FILE was NOT wired - wire it by hand)" >&2
+	exit 1
+fi
+# Two chained appends after the same anchor line: the const block, then a
+# trailing blank line to separate it from `export async function main`
+# (a single sed 'a' text block can't end in a blank line - GNU sed drops it).
+sed -i -e "$((MAIN_LINE - 1))a\\
+${CONST_BLOCK}" -e "$((MAIN_LINE - 1))a\\
+" "$TAIL_FILE"
+
+# 3. Replace the CHAIN-TAIL marker with the actual chain-launch block, right
+#    before the (now-former) tail's while(true) loop.
+if ! grep -q '// CHAIN-TAIL' "$TAIL_FILE"; then
+	echo "ERROR: CHAIN-TAIL marker vanished from $TAIL_FILE after edits above - inspect by hand" >&2
+	exit 1
+fi
+LAUNCH_BLOCK="\\t// Chain-launch the next script in the bootstrap before continuing.\\n\\tif (!ns.isRunning(${SCRIPT_CONST}, \"home\")) {\\n\\t\\tconst nextPid = await runWithRetry(ns, ${SCRIPT_CONST}, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);\\n\\t\\tif (nextPid === 0) {\\n\\t\\t\\tns.tprint(\`${TAIL_NAME}: failed to start \${${SCRIPT_CONST}} - check RAM\/sync\`);\\n\\t\\t}\\n\\t}\\n"
+sed -i "/\/\/ CHAIN-TAIL/c\\${LAUNCH_BLOCK}" "$TAIL_FILE"
+# The multi-line marker comment's continuation lines (everything up to the
+# while(true) line) are now orphaned - drop them.
+sed -i '/^\t\/\/ .*chain-launch\|^\t\/\/ controller.ts ->\|^\t\/\/ scaffolds another script/d' "$TAIL_FILE"
+
+# Verify the edits actually landed.
+if ! grep -q "^const ${SCRIPT_CONST} = \"scripts/${NAME}.js\";" "$TAIL_FILE"; then
+	echo "ERROR: constant insertion did not verify - inspect $TAIL_FILE by hand" >&2
+	exit 1
+fi
+if ! grep -q "runWithRetry(ns, ${SCRIPT_CONST}," "$TAIL_FILE"; then
+	echo "ERROR: chain-launch block insertion did not verify - inspect $TAIL_FILE by hand" >&2
+	exit 1
+fi
+if grep -q '// CHAIN-TAIL' "$TAIL_FILE"; then
+	echo "ERROR: CHAIN-TAIL marker still present in $TAIL_FILE after wiring - remove it by hand" >&2
+	exit 1
+fi
+
+echo "Wired ${TAIL_NAME}.ts -> ${SCRIPT_CONST} (chain-launch block + marker moved to $TS_FILE)"

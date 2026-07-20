@@ -8,6 +8,10 @@ const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
 
 export async function main(ns: NS): Promise<void> {
+	// CHAIN-TAIL: this is currently the last script in the boot chain (scan-root.ts ->
+	// controller.ts -> hacknet-manager.ts -> rescan-loop.ts). If new-background-loop
+	// scaffolds another script after this one, this marker moves there and a
+	// chain-launch block gets inserted here in its place.
 	while (true) {
 		await ns.sleep(RESCAN_INTERVAL_MS);
 

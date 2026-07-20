@@ -53,6 +53,35 @@ function extractNsRefs(text) {
   return refs;
 }
 
+// Known code shapes that make Bitburner's OWN static RAM analyzer (not this
+// estimator) fall back to a large, unrelated worst-case charge - confirmed
+// in-game via `mem <script>` on 2026-07-19, see the "Known false negatives"
+// section in SKILL.md for the full story. This tool has no way to predict the
+// bogus GB figure the game will attribute, so it can only flag the risky shape.
+function extractRiskFlags(text) {
+  const clean = stripComments(text);
+  const flags = [];
+
+  // A function (arrow or `function`) stored as an object/array-literal property
+  // value, with an ns.* call inside it, invoked indirectly later via the
+  // property (e.g. `{ run: (ns, host) => ns.brutessh(host) }`, called as
+  // `opener.run(...)`). This exact shape produced a phantom 10GB charge.
+  const closurePropRe = /:\s*(?:async\s*)?\([^()]*\)\s*=>[^,;{}]*\bns\.[a-zA-Z0-9_.]+\(/;
+  if (closurePropRe.test(clean)) {
+    flags.push("object/array property holding a closure that calls ns.* (invoked indirectly, e.g. `obj.prop(...)`)");
+  }
+
+  // The nullish-coalescing operator. In one confirmed case this alone made the
+  // game's analyzer fall back to the same kind of phantom worst-case charge -
+  // unrelated to any specific ns.* call, but unique to the affected file among
+  // an otherwise-clean set of scripts.
+  if (clean.includes("??")) {
+    flags.push("uses the ?? (nullish coalescing) operator");
+  }
+
+  return flags;
+}
+
 function extractLocalImportPaths(text, fromFile) {
   const clean = stripComments(text);
   const importRe = /import\s+(?:type\s+)?[^'";]*?from\s+["']([^"']+)["']/g;
@@ -68,7 +97,8 @@ function extractLocalImportPaths(text, fromFile) {
 }
 
 // Walks the entry file + all transitively-imported local .ts files, returns a
-// Map of absolute file path -> Set of ns.* method refs found directly in that file.
+// Map of absolute file path -> { refs: Set of ns.* method refs, risks: string[] }
+// found directly in that file.
 function collectFilesAndRefs(entryFile) {
   const refsByFile = new Map();
   const visited = new Set();
@@ -81,7 +111,7 @@ function collectFilesAndRefs(entryFile) {
     if (!fs.existsSync(abs)) continue; // e.g. an import that only resolves to a .d.ts
 
     const text = fs.readFileSync(abs, "utf8");
-    refsByFile.set(abs, extractNsRefs(text));
+    refsByFile.set(abs, { refs: extractNsRefs(text), risks: extractRiskFlags(text) });
 
     for (const imp of extractLocalImportPaths(text, abs)) {
       if (!visited.has(imp)) queue.push(imp);
@@ -96,8 +126,12 @@ function auditScript(entryFile, base, costTable) {
   const refsByFile = collectFilesAndRefs(entryAbs);
 
   const allRefs = new Set();
-  for (const set of refsByFile.values()) {
-    for (const r of set) allRefs.add(r);
+  const risks = [];
+  for (const [file, { refs, risks: fileRisks }] of refsByFile) {
+    for (const r of refs) allRefs.add(r);
+    for (const risk of fileRisks) {
+      risks.push(`${path.relative(repoRoot, file)}: ${risk}`);
+    }
   }
 
   let total = base;
@@ -110,9 +144,9 @@ function auditScript(entryFile, base, costTable) {
     }
   }
 
-  const entryRefs = refsByFile.get(entryAbs) ?? new Set();
+  const entryRefs = refsByFile.get(entryAbs)?.refs ?? new Set();
   const extraFiles = [];
-  for (const [file, refs] of refsByFile) {
+  for (const [file, { refs }] of refsByFile) {
     if (file === entryAbs) continue;
     const extras = [...refs].filter((r) => !entryRefs.has(r)).sort();
     if (extras.length > 0) {
@@ -120,7 +154,7 @@ function auditScript(entryFile, base, costTable) {
     }
   }
 
-  return { total, unknown: unknown.sort(), extraFiles };
+  return { total, unknown: unknown.sort(), extraFiles, risks };
 }
 
 function main() {
@@ -158,6 +192,9 @@ function main() {
     if (r.unknown.length > 0) {
       console.log(`${"".padEnd(nameWidth)}    ! unknown cost — not counted: ${r.unknown.join(", ")}`);
     }
+    for (const risk of r.risks) {
+      console.log(`${"".padEnd(nameWidth)}    ⚠ ${risk}`);
+    }
   }
 
   const anyUnknown = results.some((r) => r.unknown.length > 0);
@@ -166,6 +203,17 @@ function main() {
       "\nSome referenced ns.* methods have no entry in assets/ram-costs.json (listed above as " +
         '"unknown cost — not counted"). They were NOT added to the totals. Verify their real cost ' +
         'in-game via ns.getScriptRam("<script>", "home") and add them to the table.',
+    );
+  }
+
+  const anyRisk = results.some((r) => r.risks.length > 0);
+  if (anyRisk) {
+    console.log(
+      "\nSome scripts (marked ⚠ above) contain a code shape that has, in this repo's confirmed experience, " +
+        "made Bitburner's OWN static RAM analyzer fall back to a large phantom charge unrelated to any " +
+        "real ns.* usage - this estimator's total does NOT and CANNOT include that phantom cost. Verify the " +
+        'REAL cost in-game via `mem <script>` (or ns.getScriptRam) before trusting the total above. See ' +
+        '"Known false negatives" in SKILL.md.',
     );
   }
 }

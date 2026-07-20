@@ -1,7 +1,11 @@
 import type { NS } from "../NetscriptDefinitions";
+import { runWithRetry } from "../lib/launch";
 
+const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
 const RESERVE_FRACTION = 0.1;
 const LOOP_INTERVAL_MS = 10000;
+const LAUNCH_RETRY_ATTEMPTS = 5;
+const LAUNCH_RETRY_DELAY_MS = 3000;
 
 // Approximates ns.formulas.hacknetNodes.moneyGainRate(level, ram, cores, mult),
 // which requires Formulas.exe (not available this early). Matches its documented
@@ -14,10 +18,19 @@ function moneyGainRate(level: number, ram: number, cores: number, mult: number):
 	return level * MONEY_GAIN_PER_LEVEL * Math.pow(RAM_MULT_BASE, ram - 1) * ((cores + 5) / 6) * mult;
 }
 
+// A purchase is tagged with a kind + node index rather than a stored closure that
+// calls the ns.hacknet.* function - Bitburner's static RAM analyzer can't reliably
+// resolve an ns call made indirectly through a function value stashed in an object
+// property (invoked later as e.g. `best.apply()`), and can fall back to a wildly
+// wrong worst-case guess. Direct ns.hacknet.* calls at the call site (see main())
+// avoid that entirely.
+type PurchaseKind = "node" | "level" | "ram" | "core";
+
 interface Purchase {
+	kind: PurchaseKind;
+	nodeIndex: number;
 	cost: number;
 	gain: number;
-	apply: () => boolean;
 }
 
 function collectPurchases(ns: NS, mult: number): Purchase[] {
@@ -27,7 +40,7 @@ function collectPurchases(ns: NS, mult: number): Purchase[] {
 	if (numNodes < ns.hacknet.maxNumNodes()) {
 		const cost = ns.hacknet.getPurchaseNodeCost();
 		const gain = moneyGainRate(1, 1, 1, mult);
-		purchases.push({ cost, gain, apply: () => ns.hacknet.purchaseNode() >= 0 });
+		purchases.push({ kind: "node", nodeIndex: -1, cost, gain });
 	}
 
 	for (let i = 0; i < numNodes; i++) {
@@ -37,27 +50,48 @@ function collectPurchases(ns: NS, mult: number): Purchase[] {
 		const levelCost = ns.hacknet.getLevelUpgradeCost(i, 1);
 		if (Number.isFinite(levelCost)) {
 			const gain = moneyGainRate(stats.level + 1, stats.ram, stats.cores, mult) - currentGain;
-			purchases.push({ cost: levelCost, gain, apply: () => ns.hacknet.upgradeLevel(i, 1) });
+			purchases.push({ kind: "level", nodeIndex: i, cost: levelCost, gain });
 		}
 
 		const ramCost = ns.hacknet.getRamUpgradeCost(i, 1);
 		if (Number.isFinite(ramCost)) {
 			const gain = moneyGainRate(stats.level, stats.ram * 2, stats.cores, mult) - currentGain;
-			purchases.push({ cost: ramCost, gain, apply: () => ns.hacknet.upgradeRam(i, 1) });
+			purchases.push({ kind: "ram", nodeIndex: i, cost: ramCost, gain });
 		}
 
 		const coreCost = ns.hacknet.getCoreUpgradeCost(i, 1);
 		if (Number.isFinite(coreCost)) {
 			const gain = moneyGainRate(stats.level, stats.ram, stats.cores + 1, mult) - currentGain;
-			purchases.push({ cost: coreCost, gain, apply: () => ns.hacknet.upgradeCore(i, 1) });
+			purchases.push({ kind: "core", nodeIndex: i, cost: coreCost, gain });
 		}
 	}
 
 	return purchases;
 }
 
+function applyPurchase(ns: NS, purchase: Purchase): boolean {
+	switch (purchase.kind) {
+		case "node":
+			return ns.hacknet.purchaseNode() >= 0;
+		case "level":
+			return ns.hacknet.upgradeLevel(purchase.nodeIndex, 1);
+		case "ram":
+			return ns.hacknet.upgradeRam(purchase.nodeIndex, 1);
+		case "core":
+			return ns.hacknet.upgradeCore(purchase.nodeIndex, 1);
+	}
+}
+
 export async function main(ns: NS): Promise<void> {
 	ns.print("hacknet-manager: starting");
+
+	// Chain-launch the last script in the bootstrap before settling into our own loop.
+	if (!ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
+		const rescanPid = await runWithRetry(ns, RESCAN_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (rescanPid === 0) {
+			ns.tprint(`hacknet-manager: failed to start ${RESCAN_LOOP_SCRIPT} - check RAM/sync`);
+		}
+	}
 
 	while (true) {
 		const mult = ns.getPlayer().mults.hacknet_node_money;
@@ -70,7 +104,7 @@ export async function main(ns: NS): Promise<void> {
 		if (purchases.length > 0) {
 			const best = purchases[0];
 			const paybackSeconds = best.cost / best.gain;
-			if (best.apply()) {
+			if (applyPurchase(ns, best)) {
 				ns.print(
 					`hacknet-manager: bought upgrade for $${Math.round(best.cost).toLocaleString()} (payback ~${Math.round(paybackSeconds)}s)`,
 				);

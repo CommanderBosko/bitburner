@@ -1,14 +1,18 @@
 import type { NS } from "../NetscriptDefinitions";
 import type { ServerReport } from "../lib/types";
+import { runWithRetry } from "../lib/launch";
 
 const WEAKEN_SCRIPT = "scripts/weaken.js";
 const GROW_SCRIPT = "scripts/grow.js";
 const HACK_SCRIPT = "scripts/hack.js";
+const HACKNET_MANAGER_SCRIPT = "scripts/hacknet-manager.js";
 const SECURITY_TOLERANCE = 5;
 const MONEY_THRESHOLD = 0.75;
 const LOOP_BUFFER_MS = 200;
 const NO_RAM_RETRY_MS = 5000;
 const RETARGET_INTERVAL_MS = 30000;
+const LAUNCH_RETRY_ATTEMPTS = 5;
+const LAUNCH_RETRY_DELAY_MS = 3000;
 
 function getTopTarget(ns: NS): ServerReport | null {
 	if (!ns.fileExists("/data/servers.json", "home")) return null;
@@ -16,7 +20,12 @@ function getTopTarget(ns: NS): ServerReport | null {
 	if (!raw) return null;
 
 	const reports = JSON.parse(raw) as ServerReport[];
-	return reports.find((r) => r.rooted && r.score > 0) ?? null;
+	const match = reports.find((r) => r.rooted && r.score > 0);
+	// Deliberately not `?? null`: Bitburner's static RAM analyzer appears to fall back
+	// to a large worst-case charge on code shapes it can't fully resolve, and the
+	// nullish-coalescing operator was the one thing unique to this file among the
+	// whole (otherwise clean) launch chain. A plain ternary sidesteps it.
+	return match === undefined ? null : match;
 }
 
 function launch(ns: NS, script: string, target: string): number {
@@ -35,6 +44,15 @@ function launch(ns: NS, script: string, target: string): number {
 }
 
 export async function main(ns: NS): Promise<void> {
+	// Chain-launch the next script in the bootstrap before doing our own (possibly
+	// early-returning) work, so hacknet purchasing starts even without a hack target yet.
+	if (!ns.isRunning(HACKNET_MANAGER_SCRIPT, "home")) {
+		const hacknetPid = await runWithRetry(ns, HACKNET_MANAGER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (hacknetPid === 0) {
+			ns.tprint(`controller: failed to start ${HACKNET_MANAGER_SCRIPT} - check RAM/sync`);
+		}
+	}
+
 	let target = getTopTarget(ns);
 	if (!target) {
 		ns.tprint("controller: no rooted, hackable target found in /data/servers.json. Run scan-root.js first.");

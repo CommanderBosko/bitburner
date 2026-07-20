@@ -18,25 +18,41 @@ export function scanNetwork(ns: NS): string[] {
 	return [...visited];
 }
 
-const PORT_OPENERS: { program: string; run: (ns: NS, host: string) => boolean }[] = [
-	{ program: "BruteSSH.exe", run: (ns, host) => ns.brutessh(host) },
-	{ program: "FTPCrack.exe", run: (ns, host) => ns.ftpcrack(host) },
-	{ program: "relaySMTP.exe", run: (ns, host) => ns.relaysmtp(host) },
-	{ program: "HTTPWorm.exe", run: (ns, host) => ns.httpworm(host) },
-	{ program: "SQLInject.exe", run: (ns, host) => ns.sqlinject(host) },
-];
-
 export function tryRoot(ns: NS, host: string): boolean {
 	if (ns.hasRootAccess(host)) return true;
 
-	for (const opener of PORT_OPENERS) {
-		if (ns.fileExists(opener.program, "home")) {
-			opener.run(ns, host);
-		}
+	// Each opener is called directly (not through a closure stored in an array/object)
+	// so Bitburner's static RAM analyzer can resolve every ns.* call unambiguously.
+	// Indirect calls (e.g. invoking a function stored as `opener.run`) can make the
+	// analyzer fall back to a worst-case guess - it was attributing a phantom 10GB
+	// "codingcontract.attempt" charge to this script when the openers lived in an array.
+	//
+	// Ports don't close once opened, so re-running every available opener each call
+	// (rather than tracking which ones are "new") always leaves openedCount equal to
+	// the host's actual open port count - without the 2GB ns.getServer() tax to read it.
+	let openedCount = 0;
+	if (ns.fileExists("BruteSSH.exe", "home")) {
+		ns.brutessh(host);
+		openedCount++;
+	}
+	if (ns.fileExists("FTPCrack.exe", "home")) {
+		ns.ftpcrack(host);
+		openedCount++;
+	}
+	if (ns.fileExists("relaySMTP.exe", "home")) {
+		ns.relaysmtp(host);
+		openedCount++;
+	}
+	if (ns.fileExists("HTTPWorm.exe", "home")) {
+		ns.httpworm(host);
+		openedCount++;
+	}
+	if (ns.fileExists("SQLInject.exe", "home")) {
+		ns.sqlinject(host);
+		openedCount++;
 	}
 
-	const server = ns.getServer(host);
-	if ((server.openPortCount ?? 0) < (server.numOpenPortsRequired ?? 0)) {
+	if (openedCount < ns.getServerNumPortsRequired(host)) {
 		return false;
 	}
 

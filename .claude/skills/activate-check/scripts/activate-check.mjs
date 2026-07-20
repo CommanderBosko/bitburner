@@ -1,11 +1,17 @@
 #!/usr/bin/env node
-// Verifies src/scripts/activate.ts only references scripts that actually
-// exist, and flags background-loop scripts (while(true) + ns.sleep) that
-// exist but aren't referenced anywhere in activate.ts.
+// Verifies the chain-launch bootstrap starting at src/scripts/scan-root.ts only
+// references scripts that actually exist, and flags background-loop scripts
+// (while(true) + ns.sleep) that exist but aren't reachable from that chain.
 //
-// Exit code: non-zero only when activate.ts references a script that is
-// missing on disk. Unwired background-loop scripts are printed as an
-// advisory warning and do NOT affect the exit code.
+// The bootstrap is a self-assembling chain, not one script with a launch list:
+// scan-root.ts launches controller.ts, which launches hacknet-manager.ts, which
+// launches rescan-loop.ts (which loops back and re-launches scan-root.ts). Each
+// script references the next via a "scripts/....js" string literal. This walks
+// that chain transitively from the entrypoint.
+//
+// Exit code: non-zero only when a script reachable from the chain is missing on
+// disk. Unwired background-loop scripts are printed as an advisory warning and
+// do NOT affect the exit code.
 
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -16,7 +22,7 @@ import { fileURLToPath } from "node:url";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..", "..", "..");
 
-const activateTsPath = join(repoRoot, "src", "scripts", "activate.ts");
+const ENTRYPOINT = "scan-root";
 const srcScriptsDir = join(repoRoot, "src", "scripts");
 const distScriptsDir = join(repoRoot, "dist", "scripts");
 const distDir = join(repoRoot, "dist");
@@ -26,45 +32,64 @@ function fail(message) {
 	process.exit(1);
 }
 
-if (!existsSync(activateTsPath)) {
-	fail(`activate-check: cannot find ${activateTsPath}`);
+const entrypointTsPath = join(srcScriptsDir, `${ENTRYPOINT}.ts`);
+if (!existsSync(entrypointTsPath)) {
+	fail(`activate-check: cannot find entrypoint src/scripts/${ENTRYPOINT}.ts`);
 }
 
-const activateSource = readFileSync(activateTsPath, "utf8");
-
-// Step 1: extract every "scripts/....js" string literal anywhere in the file.
 const literalPattern = /"scripts\/[A-Za-z0-9_-]+\.js"/g;
-const matches = activateSource.match(literalPattern) ?? [];
-const referencedPaths = [...new Set(matches.map((m) => m.slice(1, -1)))].sort();
 
-console.log(`activate-check: found ${referencedPaths.length} referenced script(s) in activate.ts:`);
-for (const p of referencedPaths) {
-	console.log(`  - ${p}`);
+function referencedNames(tsPath) {
+	if (!existsSync(tsPath)) return [];
+	const source = readFileSync(tsPath, "utf8");
+	const matches = source.match(literalPattern) ?? [];
+	return [...new Set(matches.map((m) => m.slice(1, -1).replace(/^scripts\//, "").replace(/\.js$/, "")))];
+}
+
+// Step 1: BFS the chain-launch graph from the entrypoint.
+const visited = new Set([ENTRYPOINT]);
+const queue = [ENTRYPOINT];
+const edges = [];
+
+while (queue.length > 0) {
+	const name = queue.shift();
+	const tsPath = join(srcScriptsDir, `${name}.ts`);
+	for (const next of referencedNames(tsPath)) {
+		edges.push({ from: name, to: next });
+		if (!visited.has(next)) {
+			visited.add(next);
+			queue.push(next);
+		}
+	}
+}
+
+console.log(`activate-check: chain from ${ENTRYPOINT}.ts reaches ${visited.size} script(s):`);
+for (const { from, to } of edges) {
+	console.log(`  - ${from}.ts -> scripts/${to}.js`);
 }
 console.log("");
 
-// Step 2: confirm each referenced script exists as TS source, and (if dist/
-// has been built) as compiled JS too.
+// Step 2: confirm every reached script exists as TS source, and (if dist/ has
+// been built) as compiled JS too.
 const missing = [];
 const distExists = existsSync(distDir);
 
-for (const refPath of referencedPaths) {
-	const name = refPath.replace(/^scripts\//, "").replace(/\.js$/, "");
+for (const name of visited) {
 	const tsPath = join(srcScriptsDir, `${name}.ts`);
 	if (!existsSync(tsPath)) {
-		missing.push(`${refPath}: missing TypeScript source at src/scripts/${name}.ts`);
+		missing.push(`scripts/${name}.js: missing TypeScript source at src/scripts/${name}.ts`);
 		continue;
 	}
 	if (distExists) {
 		const jsPath = join(distScriptsDir, `${name}.js`);
 		if (!existsSync(jsPath)) {
-			missing.push(`${refPath}: missing compiled output at dist/scripts/${name}.js (run npm run build)`);
+			missing.push(`scripts/${name}.js: missing compiled output at dist/scripts/${name}.js (run npm run build)`);
 		}
 	}
 }
 
-// Step 3: scan every src/scripts/*.ts for the while(true) + ns.sleep shape,
-// and check whether it's wired into activate.ts.
+// Step 3: scan every src/scripts/*.ts for the while(true) + ns.sleep shape, and
+// check whether it's reachable from the chain.
 const loopPattern = /while\s*\(\s*true\s*\)\s*\{/;
 const sleepPattern = /await\s+ns\.sleep\s*\(/;
 
@@ -72,17 +97,14 @@ const warnings = [];
 if (existsSync(srcScriptsDir)) {
 	const files = readdirSync(srcScriptsDir).filter((f) => f.endsWith(".ts"));
 	for (const file of files) {
-		if (file === "activate.ts") continue;
+		const name = file.replace(/\.ts$/, "");
+		if (visited.has(name)) continue;
 		const filePath = join(srcScriptsDir, file);
 		const contents = readFileSync(filePath, "utf8");
 		if (loopPattern.test(contents) && sleepPattern.test(contents)) {
-			const name = file.replace(/\.ts$/, "");
-			const expectedRef = `scripts/${name}.js`;
-			if (!activateSource.includes(expectedRef)) {
-				warnings.push(
-					`background-loop script ${file} exists but isn't referenced in activate.ts - was it meant to be wired in?`,
-				);
-			}
+			warnings.push(
+				`background-loop script ${file} exists but isn't reachable from the ${ENTRYPOINT}.ts chain - was it meant to be wired in?`,
+			);
 		}
 	}
 }
@@ -95,12 +117,12 @@ if (missing.length > 0) {
 		console.log(`  - ${m}`);
 	}
 } else {
-	console.log("PASS: every script activate.ts references exists.");
+	console.log(`PASS: every script reachable from ${ENTRYPOINT}.ts exists.`);
 }
 
 console.log("");
 if (warnings.length > 0) {
-	console.log(`ADVISORY: ${warnings.length} background-loop script(s) not wired into activate.ts:`);
+	console.log(`ADVISORY: ${warnings.length} background-loop script(s) not reachable from the chain:`);
 	for (const w of warnings) {
 		console.log(`  - ${w}`);
 	}
