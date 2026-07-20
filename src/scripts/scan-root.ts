@@ -1,5 +1,6 @@
 import type { NS } from "../NetscriptDefinitions";
-import { scanNetwork, tryRoot } from "../lib/network";
+import { scanNetwork } from "../lib/network";
+import { tryRoot } from "../lib/root";
 import type { ServerReport } from "../lib/types";
 import { runWithRetry } from "../lib/launch";
 

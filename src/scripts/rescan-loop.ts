@@ -7,11 +7,17 @@ const POLL_INTERVAL_MS = 200;
 const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
 
+const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";
+
 export async function main(ns: NS): Promise<void> {
-	// CHAIN-TAIL: this is currently the last script in the boot chain (scan-root.ts ->
-	// controller.ts -> hacknet-manager.ts -> rescan-loop.ts). If new-background-loop
-	// scaffolds another script after this one, this marker moves there and a
-	// chain-launch block gets inserted here in its place.
+	// Chain-launch the next script in the bootstrap before continuing.
+	if (!ns.isRunning(BACKDOOR_LOOP_SCRIPT, "home")) {
+		const nextPid = await runWithRetry(ns, BACKDOOR_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (nextPid === 0) {
+			ns.tprint(`rescan-loop: failed to start ${BACKDOOR_LOOP_SCRIPT} - check RAM/sync`);
+		}
+	}
+
 	while (true) {
 		await ns.sleep(RESCAN_INTERVAL_MS);
 

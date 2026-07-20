@@ -18,44 +18,31 @@ export function scanNetwork(ns: NS): string[] {
 	return [...visited];
 }
 
-export function tryRoot(ns: NS, host: string): boolean {
-	if (ns.hasRootAccess(host)) return true;
+export function buildParentMap(ns: NS): Map<string, string> {
+	const parents = new Map<string, string>();
+	const visited = new Set<string>(["home"]);
+	const queue: string[] = ["home"];
 
-	// Each opener is called directly (not through a closure stored in an array/object)
-	// so Bitburner's static RAM analyzer can resolve every ns.* call unambiguously.
-	// Indirect calls (e.g. invoking a function stored as `opener.run`) can make the
-	// analyzer fall back to a worst-case guess - it was attributing a phantom 10GB
-	// "codingcontract.attempt" charge to this script when the openers lived in an array.
-	//
-	// Ports don't close once opened, so re-running every available opener each call
-	// (rather than tracking which ones are "new") always leaves openedCount equal to
-	// the host's actual open port count - without the 2GB ns.getServer() tax to read it.
-	let openedCount = 0;
-	if (ns.fileExists("BruteSSH.exe", "home")) {
-		ns.brutessh(host);
-		openedCount++;
-	}
-	if (ns.fileExists("FTPCrack.exe", "home")) {
-		ns.ftpcrack(host);
-		openedCount++;
-	}
-	if (ns.fileExists("relaySMTP.exe", "home")) {
-		ns.relaysmtp(host);
-		openedCount++;
-	}
-	if (ns.fileExists("HTTPWorm.exe", "home")) {
-		ns.httpworm(host);
-		openedCount++;
-	}
-	if (ns.fileExists("SQLInject.exe", "home")) {
-		ns.sqlinject(host);
-		openedCount++;
+	while (queue.length > 0) {
+		const current = queue.shift() as string;
+		for (const neighbor of ns.scan(current)) {
+			if (!visited.has(neighbor)) {
+				visited.add(neighbor);
+				parents.set(neighbor, current);
+				queue.push(neighbor);
+			}
+		}
 	}
 
-	if (openedCount < ns.getServerNumPortsRequired(host)) {
-		return false;
-	}
+	return parents;
+}
 
-	ns.nuke(host);
-	return ns.hasRootAccess(host);
+export function pathTo(parents: Map<string, string>, target: string): string[] {
+	const path: string[] = [target];
+	let current = target;
+	while (parents.has(current)) {
+		current = parents.get(current) as string;
+		path.unshift(current);
+	}
+	return path;
 }
