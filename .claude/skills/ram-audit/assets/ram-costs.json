@@ -1,7 +1,7 @@
 {
   "__base__": 1.6,
   "__source__": "https://github.com/bitburner-official/bitburner-src/blob/dev/src/Netscript/RamCostGenerator.ts (fetched 2026-07-19)",
-  "__note__": "Covers core/general NS functions plus hacknet.* and ui.* and formulas.* (all near-future-likely for this repo per CLAUDE.md's early-game hack/grow/weaken + hacknet focus). Deliberately excludes the extended late-game subsystem APIs (corporation, gang, bladeburner, sleeve, stanek, go, singularity, stock, codingcontract, infiltration, grafting, cloud, dnet) — referencing any of those will correctly surface as 'unknown cost' rather than a silent wrong number. Re-derive this whole file from the same RamCostGenerator.ts source whenever NetscriptDefinitions.d.ts is re-fetched for a game-version bump, and extend it if this repo grows into one of the excluded subsystems.",
+  "__note__": "Covers core/general NS functions plus hacknet.* and ui.* and formulas.* (all near-future-likely for this repo per CLAUDE.md's early-game hack/grow/weaken + hacknet focus). Deliberately excludes the extended late-game subsystem APIs (corporation, gang, bladeburner, sleeve, stanek, go, singularity, stock, codingcontract, infiltration, grafting, cloud, dnet) — referencing any of those will correctly surface as 'unknown cost' rather than a silent wrong number. singularity.connect is the sole exception, added below after being confirmed in-game via `mem connect-to.js` (2026-07-20: 33.80GB total = 1.6 base + 0.2 scan + 32.0 connect) since this repo now calls it from backdoor-loop.ts and connect-to.ts; other singularity.* methods (e.g. installBackdoor, still used by backdoor-loop.ts) remain unconfirmed and deliberately excluded. Re-derive this whole file from the same RamCostGenerator.ts source whenever NetscriptDefinitions.d.ts is re-fetched for a game-version bump, and extend it if this repo grows into one of the excluded subsystems.",
 
   "scan": 0.2,
   "hack": 0.1,
@@ -190,5 +190,7 @@
   "formulas.hacknetNodes.ramUpgradeCost": 0,
   "formulas.hacknetNodes.coreUpgradeCost": 0,
   "formulas.hacknetNodes.hacknetNodeCost": 0,
-  "formulas.hacknetNodes.constants": 0
+  "formulas.hacknetNodes.constants": 0,
+
+  "singularity.connect": 32
 }
