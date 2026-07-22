@@ -4,7 +4,6 @@ import { runWithRetry } from "../lib/launch";
 const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
 const RESERVE_FRACTION = 0.1;
 const LOOP_INTERVAL_MS = 10000;
-const MAX_PAYBACK_SECONDS = 1800; // 30 min — purchases slower than this are skipped
 const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
 
@@ -99,7 +98,7 @@ export async function main(ns: NS): Promise<void> {
 		const spendable = ns.getPlayer().money * (1 - RESERVE_FRACTION);
 
 		const purchases = collectPurchases(ns, mult)
-			.filter((p) => p.gain > 0 && p.cost <= spendable && p.cost / p.gain <= MAX_PAYBACK_SECONDS)
+			.filter((p) => p.gain > 0 && p.cost <= spendable)
 			.sort((a, b) => a.cost / a.gain - b.cost / b.gain);
 
 		if (purchases.length > 0) {
