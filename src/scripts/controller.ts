@@ -6,6 +6,7 @@ const WEAKEN_SCRIPT = "scripts/weaken.js";
 const GROW_SCRIPT = "scripts/grow.js";
 const HACK_SCRIPT = "scripts/hack.js";
 const HACKNET_MANAGER_SCRIPT = "scripts/hacknet-manager.js";
+const BATTLESTATION_SCRIPT = "scripts/battlestation.js";
 const SECURITY_TOLERANCE = 5;
 const MONEY_THRESHOLD = 0.75;
 const LOOP_BUFFER_MS = 200;
@@ -50,6 +51,15 @@ export async function main(ns: NS): Promise<void> {
 		const hacknetPid = await runWithRetry(ns, HACKNET_MANAGER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
 		if (hacknetPid === 0) {
 			ns.tprint(`controller: failed to start ${HACKNET_MANAGER_SCRIPT} - check RAM/sync`);
+		}
+	}
+
+	// Reserve battlestation's RAM footprint before sizing any weaken/grow/hack batch,
+	// so those batches are computed against the RAM actually left over.
+	if (!ns.isRunning(BATTLESTATION_SCRIPT, "home")) {
+		const battlestationPid = await runWithRetry(ns, BATTLESTATION_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (battlestationPid === 0) {
+			ns.tprint(`controller: failed to start ${BATTLESTATION_SCRIPT} - check RAM/sync`);
 		}
 	}
 
