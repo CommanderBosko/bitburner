@@ -1,7 +1,7 @@
 {
   "__base__": 1.6,
   "__source__": "https://github.com/bitburner-official/bitburner-src/blob/dev/src/Netscript/RamCostGenerator.ts (fetched 2026-07-19)",
-  "__note__": "Covers core/general NS functions plus hacknet.* and ui.* and formulas.* (all near-future-likely for this repo per CLAUDE.md's early-game hack/grow/weaken + hacknet focus). Deliberately excludes the extended late-game subsystem APIs (corporation, gang, bladeburner, sleeve, stanek, go, singularity, stock, codingcontract, infiltration, grafting, cloud, dnet) — referencing any of those will correctly surface as 'unknown cost' rather than a silent wrong number. singularity.connect is the sole exception, added below after being confirmed in-game via `mem connect-to.js` (2026-07-20: 33.80GB total = 1.6 base + 0.2 scan + 32.0 connect) since this repo now calls it from backdoor-loop.ts and connect-to.ts; other singularity.* methods (e.g. installBackdoor, still used by backdoor-loop.ts) remain unconfirmed and deliberately excluded. Re-derive this whole file from the same RamCostGenerator.ts source whenever NetscriptDefinitions.d.ts is re-fetched for a game-version bump, and extend it if this repo grows into one of the excluded subsystems.",
+  "__note__": "Covers core/general NS functions plus hacknet.* and ui.* and formulas.* (all near-future-likely for this repo per CLAUDE.md's early-game hack/grow/weaken + hacknet focus). Deliberately excludes the extended late-game subsystem APIs (corporation, gang, bladeburner, sleeve, stanek, go, singularity, stock, codingcontract, infiltration, grafting, dnet) — referencing any of those will correctly surface as 'unknown cost' rather than a silent wrong number. singularity.connect is the sole singularity exception, added below after being confirmed in-game via `mem connect-to.js` (2026-07-20: 33.80GB total = 1.6 base + 0.2 scan + 32.0 connect) since this repo now calls it from backdoor-loop.ts and connect-to.ts; other singularity.* methods (e.g. installBackdoor, still used by backdoor-loop.ts) remain unconfirmed and deliberately excluded. cloud.* was added in full (2026-07-23) from NetscriptDefinitions.d.ts's documented `RAM cost:` remarks directly (not yet cross-checked against RamCostGenerator.ts or `mem`-verified in-game) once server-purchase-manager.ts/controller.ts/battlestation.ts started using it for purchased-server automation. Re-derive this whole file from the same RamCostGenerator.ts source whenever NetscriptDefinitions.d.ts is re-fetched for a game-version bump, and extend it if this repo grows into one of the still-excluded subsystems.",
 
   "scan": 0.2,
   "hack": 0.1,
@@ -192,5 +192,15 @@
   "formulas.hacknetNodes.hacknetNodeCost": 0,
   "formulas.hacknetNodes.constants": 0,
 
-  "singularity.connect": 32
+  "singularity.connect": 32,
+
+  "cloud.getServerCost": 0.25,
+  "cloud.purchaseServer": 2.25,
+  "cloud.getServerUpgradeCost": 0.1,
+  "cloud.upgradeServer": 0.25,
+  "cloud.renameServer": 0,
+  "cloud.deleteServer": 2.25,
+  "cloud.getServerNames": 1.05,
+  "cloud.getServerLimit": 0.05,
+  "cloud.getRamLimit": 0.05
 }

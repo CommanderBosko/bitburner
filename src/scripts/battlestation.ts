@@ -79,15 +79,27 @@ function readServerReports(ns: NS): ServerReport[] {
 }
 
 function renderWorkerLines(ns: NS): string[] {
-	const processes = ns.ps("home").filter((p) => WORKER_SCRIPTS.includes(p.filename));
-	if (processes.length === 0) return [row("Active jobs", "none")];
+	// Jobs can land on any purchased server as well as home now that controller.ts spreads
+	// weaken/grow/hack dispatch across the whole host pool - checking home only would make
+	// this HUD silently blind to most of the fleet's actual activity. Each job is paired
+	// with the host it's running on (not just flattened away) so every row can show where
+	// it landed - otherwise every pserv- box's jobs would be visually indistinguishable
+	// from each other and from home's.
+	const hosts = ["home", ...ns.cloud.getServerNames()];
+	const jobs = hosts.flatMap((host) =>
+		ns
+			.ps(host)
+			.filter((p) => WORKER_SCRIPTS.includes(p.filename))
+			.map((process) => ({ host, process })),
+	);
+	if (jobs.length === 0) return [row("Active jobs", "none")];
 
-	return processes.map((p) => {
-		const stem = p.filename.split("/").pop();
-		const action = stem === undefined ? p.filename : stem.replace(".js", "");
+	return jobs.map(({ host, process }) => {
+		const stem = process.filename.split("/").pop();
+		const action = stem === undefined ? process.filename : stem.replace(".js", "");
 		const label = action === "hack" ? "Hack Target:" : action;
-		const target = p.args[0] === undefined ? "?" : String(p.args[0]);
-		return row(label, `${target} (${p.threads}t)`);
+		const target = process.args[0] === undefined ? "?" : String(process.args[0]);
+		return row(label, `${target} (${process.threads}t) @ ${host}`);
 	});
 }
 

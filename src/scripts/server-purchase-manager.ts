@@ -1,0 +1,76 @@
+import type { NS } from "../NetscriptDefinitions";
+
+const RESERVE_FRACTION = 0.1;
+const LOOP_INTERVAL_MS = 10000;
+const STARTING_RAM_GB = 8;
+const SERVER_NAME_PREFIX = "pserv-";
+
+interface Candidate {
+	kind: "buy" | "upgrade";
+	hostname?: string;
+	targetRam: number;
+	// RAM actually gained by taking this candidate - for "buy" it's the full starting
+	// size (going from 0), for "upgrade" it's targetRam minus the server's current RAM.
+	// Ranking candidates by cost/gainedRam (not cost/targetRam) is what lets a cheap
+	// early upgrade outrank a much larger but proportionally pricier one.
+	gainedRam: number;
+	cost: number;
+}
+
+function collectCandidates(ns: NS): Candidate[] {
+	const candidates: Candidate[] = [];
+	const owned = ns.cloud.getServerNames();
+	const limit = ns.cloud.getServerLimit();
+	const ramLimit = ns.cloud.getRamLimit();
+
+	if (owned.length < limit) {
+		const cost = ns.cloud.getServerCost(STARTING_RAM_GB);
+		if (Number.isFinite(cost)) {
+			candidates.push({ kind: "buy", targetRam: STARTING_RAM_GB, gainedRam: STARTING_RAM_GB, cost });
+		}
+	}
+
+	for (const hostname of owned) {
+		const currentRam = ns.getServerMaxRam(hostname);
+		const nextRam = currentRam * 2;
+		if (nextRam > ramLimit) continue;
+
+		const cost = ns.cloud.getServerUpgradeCost(hostname, nextRam);
+		if (!Number.isFinite(cost) || cost < 0) continue;
+		candidates.push({ kind: "upgrade", hostname, targetRam: nextRam, gainedRam: nextRam - currentRam, cost });
+	}
+
+	return candidates;
+}
+
+function applyCandidate(ns: NS, candidate: Candidate): boolean {
+	if (candidate.kind === "buy") {
+		return ns.cloud.purchaseServer(`${SERVER_NAME_PREFIX}${Date.now()}`, candidate.targetRam) !== "";
+	}
+	// "upgrade" candidates always carry a hostname (set in collectCandidates), but the
+	// field is optional on the shared Candidate type - narrow it here rather than casting.
+	return candidate.hostname !== undefined && ns.cloud.upgradeServer(candidate.hostname, candidate.targetRam);
+}
+
+export async function main(ns: NS): Promise<void> {
+	ns.print("server-purchase-manager: starting");
+
+	while (true) {
+		const spendable = ns.getPlayer().money * (1 - RESERVE_FRACTION);
+		const affordable = collectCandidates(ns).filter((c) => c.cost > 0 && c.cost <= spendable);
+
+		if (affordable.length > 0) {
+			// Greedy cheapest-RAM-per-dollar first, same shape as hacknet-manager.ts's
+			// cost/gain ordering - one purchase per tick keeps each decision cheap to
+			// recompute as prices and cash change.
+			affordable.sort((a, b) => a.cost / a.gainedRam - b.cost / b.gainedRam);
+			const best = affordable[0];
+			if (applyCandidate(ns, best)) {
+				const label = best.kind === "buy" ? "purchased new server" : `upgraded ${best.hostname}`;
+				ns.print(`server-purchase-manager: ${label} to ${best.targetRam}GB for $${Math.round(best.cost).toLocaleString()}`);
+			}
+		}
+
+		await ns.sleep(LOOP_INTERVAL_MS);
+	}
+}
