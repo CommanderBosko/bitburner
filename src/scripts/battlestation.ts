@@ -7,7 +7,7 @@ type MoneySources = ReturnType<NS["getMoneySources"]>;
 type MoneySource = MoneySources["sinceInstall"];
 type MoneySourceKey = keyof MoneySource;
 
-const BATTLESTATION_INTERVAL_MS = 1000;
+const BATTLESTATION_INTERVAL_MS = 60000;
 const WORKER_SCRIPTS = ["scripts/hack.js", "scripts/grow.js", "scripts/weaken.js"];
 const LABEL_WIDTH = 14;
 const TAIL_WIDTH = 420;
@@ -112,8 +112,8 @@ function renderRamLine(ns: NS): string {
 	return row("Network RAM:", `${formatRam(usedRam)} / ${formatRam(maxRam)}`);
 }
 
-function renderMoneyLine(ns: NS, incomePerSecond: number): string {
-	return row("Money:", `${formatMoney(ns.getServerMoneyAvailable("home"))} (${formatMoney(incomePerSecond)}/s)`);
+function renderMoneyLine(ns: NS, incomePerMinute: number): string {
+	return row("Money:", `${formatMoney(ns.getServerMoneyAvailable("home"))} (${formatMoney(incomePerMinute)}/min)`);
 }
 
 function netSourceValue(source: MoneySource, key: MoneySourceKey): number {
@@ -121,22 +121,22 @@ function netSourceValue(source: MoneySource, key: MoneySourceKey): number {
 	return source[key] + (expenseKey ? source[expenseKey] : 0);
 }
 
-function computeSourceRates(current: MoneySource, previous: MoneySource, elapsedSeconds: number): Map<MoneySourceKey, number> {
+function computeSourceRates(current: MoneySource, previous: MoneySource, elapsedMinutes: number): Map<MoneySourceKey, number> {
 	const rates = new Map<MoneySourceKey, number>();
-	if (elapsedSeconds <= 0) return rates;
+	if (elapsedMinutes <= 0) return rates;
 
 	for (const key of MONEY_SOURCE_ORDER) {
 		const currentNet = netSourceValue(current, key);
 		const previousNet = netSourceValue(previous, key);
 		if (currentNet === 0 && previousNet === 0) continue;
-		rates.set(key, (currentNet - previousNet) / elapsedSeconds);
+		rates.set(key, (currentNet - previousNet) / elapsedMinutes);
 	}
 
 	return rates;
 }
 
-function renderSourceLines(current: MoneySource, previous: MoneySource, elapsedSeconds: number): string[] {
-	const rates = computeSourceRates(current, previous, elapsedSeconds);
+function renderSourceLines(current: MoneySource, previous: MoneySource, elapsedMinutes: number): string[] {
+	const rates = computeSourceRates(current, previous, elapsedMinutes);
 	if (rates.size === 0) return [];
 
 	const lines = ["--- Income Sources ---"];
@@ -144,15 +144,15 @@ function renderSourceLines(current: MoneySource, previous: MoneySource, elapsedS
 		const knownLabel = MONEY_SOURCE_LABELS[key];
 		const label = knownLabel === undefined ? key : knownLabel;
 		const sign = rate >= 0 ? "+" : "-";
-		lines.push(row(`${label}:`, `${sign}${formatMoney(Math.abs(rate))}/s`));
+		lines.push(row(`${label}:`, `${sign}${formatMoney(Math.abs(rate))}/min`));
 	}
 	return lines;
 }
 
-function renderFrame(ns: NS, incomePerSecond: number, sourceLines: string[]): string {
+function renderFrame(ns: NS, incomePerMinute: number, sourceLines: string[]): string {
 	const lines = [
 		"=== BATTLESTATION ===",
-		renderMoneyLine(ns, incomePerSecond),
+		renderMoneyLine(ns, incomePerMinute),
 		...sourceLines,
 		renderRootLine(ns),
 		renderRamLine(ns),
@@ -184,14 +184,14 @@ export async function main(ns: NS): Promise<void> {
 			// across battlestation restarts, only resetting on an augmentation install.
 			const moneySources = ns.getMoneySources().sinceInstall;
 			const now = Date.now();
-			const elapsedSeconds = (now - lastSampleTime) / 1000;
-			const incomePerSecond = elapsedSeconds > 0 ? (money - lastMoney) / elapsedSeconds : 0;
-			const sourceLines = lastMoneySources ? renderSourceLines(moneySources, lastMoneySources, elapsedSeconds) : [];
+			const elapsedMinutes = (now - lastSampleTime) / 60000;
+			const incomePerMinute = elapsedMinutes > 0 ? (money - lastMoney) / elapsedMinutes : 0;
+			const sourceLines = lastMoneySources ? renderSourceLines(moneySources, lastMoneySources, elapsedMinutes) : [];
 			lastMoney = money;
 			lastMoneySources = moneySources;
 			lastSampleTime = now;
 
-			const frame = renderFrame(ns, incomePerSecond, sourceLines);
+			const frame = renderFrame(ns, incomePerMinute, sourceLines);
 			if (frame !== lastFrame) {
 				ns.clearLog();
 				ns.print(frame);
