@@ -7,6 +7,7 @@ const GROW_SCRIPT = "scripts/grow.js";
 const HACK_SCRIPT = "scripts/hack.js";
 const HACKNET_MANAGER_SCRIPT = "scripts/hacknet-manager.js";
 const BATTLESTATION_SCRIPT = "scripts/battlestation.js";
+const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 const SECURITY_TOLERANCE = 5;
 const MONEY_THRESHOLD = 0.75;
 const LOOP_BUFFER_MS = 200;
@@ -14,6 +15,15 @@ const NO_RAM_RETRY_MS = 5000;
 const RETARGET_INTERVAL_MS = 30000;
 const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
+// Headroom for darknet-manager's own ns.exec dispatches, which this loop would otherwise starve
+// out by claiming all available home RAM every cycle. darknet-manager can fire up to 3
+// value + 2 recon dispatches per cycle (see VALUE/RECON_DISPATCH_PER_CYCLE), but reserving
+// for all of them at once (~29GB) would exceed home's total RAM outright - this only
+// guarantees at least one dispatch clears per cycle, sized to the heaviest single one:
+// darknet-agent-value.js at 6.80GB (3.75GB base ns.* cost per ram-audit + 3.05GB of
+// ns.dnet.connectToSession/getBlockedRam/memoryReallocation/openCache, verified via
+// ns-cost-lookup against NetscriptDefinitions.d.ts) with ~1.2GB margin.
+const DARKNET_RAM_RESERVE_GB = 8;
 
 function getTopTarget(ns: NS): ServerReport | null {
 	if (!ns.fileExists("/data/servers.json", "home")) return null;
@@ -36,7 +46,7 @@ function launch(ns: NS, script: string, target: string): number {
 		return 0;
 	}
 
-	const availableRam = ns.getServerMaxRam("home") - ns.getServerUsedRam("home");
+	const availableRam = ns.getServerMaxRam("home") - ns.getServerUsedRam("home") - DARKNET_RAM_RESERVE_GB;
 	const threads = Math.floor(availableRam / ramPerThread);
 	if (threads < 1) return 0;
 
@@ -60,6 +70,15 @@ export async function main(ns: NS): Promise<void> {
 		const battlestationPid = await runWithRetry(ns, BATTLESTATION_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
 		if (battlestationPid === 0) {
 			ns.tprint(`controller: failed to start ${BATTLESTATION_SCRIPT} - check RAM/sync`);
+		}
+	}
+
+	// Same reasoning as battlestation above: launch before batch sizing so its RAM
+	// footprint is already reflected in ns.getServerUsedRam() by the time launch() runs.
+	if (!ns.isRunning(SERVER_TREE_SCRIPT, "home")) {
+		const serverTreePid = await runWithRetry(ns, SERVER_TREE_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (serverTreePid === 0) {
+			ns.tprint(`controller: failed to start ${SERVER_TREE_SCRIPT} - check RAM/sync`);
 		}
 	}
 
