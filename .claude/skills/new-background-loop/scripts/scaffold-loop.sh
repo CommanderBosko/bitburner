@@ -97,12 +97,19 @@ if [[ -z "$MAIN_LINE" ]]; then
 	echo "        (created $TS_FILE but $TAIL_FILE was NOT wired - wire it by hand)" >&2
 	exit 1
 fi
-# Two chained appends after the same anchor line: the const block, then a
-# trailing blank line to separate it from `export async function main`
-# (a single sed 'a' text block can't end in a blank line - GNU sed drops it).
-sed -i -e "$((MAIN_LINE - 1))a\\
-${CONST_BLOCK}" -e "$((MAIN_LINE - 1))a\\
-" "$TAIL_FILE"
+# Write the block (plus a trailing blank line) to a temp file and use sed's
+# `r` (read-file) command instead of `a\` with inline text. `a\` requires every
+# line but the last to end in a literal backslash; a 2+ line CONST_BLOCK (e.g.
+# when LAUNCH_RETRY_ATTEMPTS/LAUNCH_RETRY_DELAY_MS also need declaring) fed to
+# `a\` raw gets its extra lines parsed as addressless sed commands - since they
+# start with `const`, the leading `c` was read as the `c` (change) command with
+# no address, replacing the *entire file* with the last such line. `r` just
+# copies file bytes verbatim after the addressed line - no escaping, no
+# line-count limit, immune to this class of corruption.
+CONST_TMP="$(mktemp)"
+printf '%s\n\n' "$CONST_BLOCK" > "$CONST_TMP"
+sed -i "$((MAIN_LINE - 1))r $CONST_TMP" "$TAIL_FILE"
+rm -f "$CONST_TMP"
 
 # 3. Replace the CHAIN-TAIL marker with the actual chain-launch block, right
 #    before the (now-former) tail's while(true) loop.
