@@ -7,15 +7,8 @@ const LOOP_INTERVAL_MS = 10000;
 const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
 
-// Approximates ns.formulas.hacknetNodes.moneyGainRate(level, ram, cores, mult),
-// which requires Formulas.exe (not available this early). Matches its documented
-// signature/shape; only used to rank purchases by payback period, so an imprecise
-// constant here just makes purchase ordering slightly suboptimal, not incorrect.
-const MONEY_GAIN_PER_LEVEL = 1.5;
-const RAM_MULT_BASE = 1.035;
-
-function moneyGainRate(level: number, ram: number, cores: number, mult: number): number {
-	return level * MONEY_GAIN_PER_LEVEL * Math.pow(RAM_MULT_BASE, ram - 1) * ((cores + 5) / 6) * mult;
+function moneyGainRate(ns: NS, level: number, ram: number, cores: number, mult: number): number {
+	return ns.formulas.hacknetNodes.moneyGainRate(level, ram, cores, mult);
 }
 
 // A purchase is tagged with a kind + node index rather than a stored closure that
@@ -39,29 +32,29 @@ function collectPurchases(ns: NS, mult: number): Purchase[] {
 
 	if (numNodes < ns.hacknet.maxNumNodes()) {
 		const cost = ns.hacknet.getPurchaseNodeCost();
-		const gain = moneyGainRate(1, 1, 1, mult);
+		const gain = moneyGainRate(ns, 1, 1, 1, mult);
 		purchases.push({ kind: "node", nodeIndex: -1, cost, gain });
 	}
 
 	for (let i = 0; i < numNodes; i++) {
 		const stats = ns.hacknet.getNodeStats(i);
-		const currentGain = moneyGainRate(stats.level, stats.ram, stats.cores, mult);
+		const currentGain = moneyGainRate(ns, stats.level, stats.ram, stats.cores, mult);
 
 		const levelCost = ns.hacknet.getLevelUpgradeCost(i, 1);
 		if (Number.isFinite(levelCost)) {
-			const gain = moneyGainRate(stats.level + 1, stats.ram, stats.cores, mult) - currentGain;
+			const gain = moneyGainRate(ns, stats.level + 1, stats.ram, stats.cores, mult) - currentGain;
 			purchases.push({ kind: "level", nodeIndex: i, cost: levelCost, gain });
 		}
 
 		const ramCost = ns.hacknet.getRamUpgradeCost(i, 1);
 		if (Number.isFinite(ramCost)) {
-			const gain = moneyGainRate(stats.level, stats.ram * 2, stats.cores, mult) - currentGain;
+			const gain = moneyGainRate(ns, stats.level, stats.ram * 2, stats.cores, mult) - currentGain;
 			purchases.push({ kind: "ram", nodeIndex: i, cost: ramCost, gain });
 		}
 
 		const coreCost = ns.hacknet.getCoreUpgradeCost(i, 1);
 		if (Number.isFinite(coreCost)) {
-			const gain = moneyGainRate(stats.level, stats.ram, stats.cores + 1, mult) - currentGain;
+			const gain = moneyGainRate(ns, stats.level, stats.ram, stats.cores + 1, mult) - currentGain;
 			purchases.push({ kind: "core", nodeIndex: i, cost: coreCost, gain });
 		}
 	}
