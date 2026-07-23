@@ -57,10 +57,22 @@ export async function main(ns: NS): Promise<void> {
 	}
 
 	// Arrived at the target's parent - directly connected to targetHost from here. The darknet
-	// is unstable (servers can go offline between the manager building this dispatch and it
-	// landing here) - authenticate() would just return a failed result either way, but check
-	// up front to avoid wasting the whole batch on a dead target.
-	if (!ns.dnet.getServerDetails(targetHost).isOnline) {
+	// is unstable (servers can go offline, or move/vanish entirely between the manager building
+	// this dispatch and it landing here) - authenticate() would just return a failed result
+	// either way for the "offline" case, but check up front to avoid wasting the whole batch on
+	// a dead target. A fully-invalid (moved/gone) target throws ("Invalid host") rather than
+	// returning the documented offline dummy object, same as the hop-walk failures above - catch
+	// it the same way and tell the manager so it stops re-offering this target.
+	let targetDetails: ReturnType<NS["dnet"]["getServerDetails"]>;
+	try {
+		targetDetails = ns.dnet.getServerDetails(targetHost);
+	} catch (error) {
+		ns.print(`darknet-crack: ${targetHost} invalid (path likely stale) - ${String(error)}`);
+		const hopFailedMessage: DarknetHopFailedMessage = { kind: "hopFailed", hostname: targetHost, reason: String(error) };
+		ns.writePort(DARKNET_REPORT_PORT, hopFailedMessage);
+		return;
+	}
+	if (!targetDetails.isOnline) {
 		ns.print(`darknet-crack: ${targetHost} is offline - skipping this batch`);
 		const message: DarknetCrackResultMessage = {
 			kind: "crackResult",
