@@ -46,7 +46,12 @@ function launch(ns: NS, script: string, target: string): number {
 		return 0;
 	}
 
-	const availableRam = ns.getServerMaxRam("home") - ns.getServerUsedRam("home") - DARKNET_RAM_RESERVE_GB;
+	// server-tree.js is deliberately NOT chain-launched (run it by hand when wanted), but its
+	// RAM still needs holding open so launching it later never has to wait on a batch to free up
+	// - queried live rather than hardcoded like DARKNET_RAM_RESERVE_GB, since this is one fixed
+	// script's own static cost rather than a variable multi-dispatch worst case.
+	const serverTreeReserveGb = ns.getScriptRam(SERVER_TREE_SCRIPT, "home");
+	const availableRam = ns.getServerMaxRam("home") - ns.getServerUsedRam("home") - DARKNET_RAM_RESERVE_GB - serverTreeReserveGb;
 	const threads = Math.floor(availableRam / ramPerThread);
 	if (threads < 1) return 0;
 
@@ -70,15 +75,6 @@ export async function main(ns: NS): Promise<void> {
 		const battlestationPid = await runWithRetry(ns, BATTLESTATION_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
 		if (battlestationPid === 0) {
 			ns.tprint(`controller: failed to start ${BATTLESTATION_SCRIPT} - check RAM/sync`);
-		}
-	}
-
-	// Same reasoning as battlestation above: launch before batch sizing so its RAM
-	// footprint is already reflected in ns.getServerUsedRam() by the time launch() runs.
-	if (!ns.isRunning(SERVER_TREE_SCRIPT, "home")) {
-		const serverTreePid = await runWithRetry(ns, SERVER_TREE_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-		if (serverTreePid === 0) {
-			ns.tprint(`controller: failed to start ${SERVER_TREE_SCRIPT} - check RAM/sync`);
 		}
 	}
 
