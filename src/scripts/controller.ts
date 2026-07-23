@@ -20,6 +20,9 @@ const HACK_MONEY_FRACTION = 0.5;
 const LOOP_BUFFER_MS = 200;
 const NO_RAM_RETRY_MS = 5000;
 const RETARGET_INTERVAL_MS = 30000;
+// Floor for the scheduler's sleep so a due time in the very near future (or already passed)
+// can't produce a near-zero sleep and spin the loop.
+const MIN_LOOP_SLEEP_MS = 50;
 const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
 // Headroom for darknet-manager's own ns.exec dispatches, which this loop would otherwise starve
@@ -32,26 +35,27 @@ const LAUNCH_RETRY_DELAY_MS = 3000;
 // ns-cost-lookup against NetscriptDefinitions.d.ts) with ~1.2GB margin.
 const DARKNET_RAM_RESERVE_GB = 8;
 
-function getTopTarget(ns: NS): ServerReport | null {
-	if (!ns.fileExists("/data/servers.json", "home")) return null;
+function getCandidateTargets(ns: NS): ServerReport[] {
+	if (!ns.fileExists("/data/servers.json", "home")) return [];
 	const raw = ns.read("/data/servers.json");
-	if (!raw) return null;
+	if (!raw) return [];
 
 	const reports = JSON.parse(raw) as ServerReport[];
-	const match = reports.find((r) => r.rooted && r.score > 0);
-	// Deliberately not `?? null`: Bitburner's static RAM analyzer appears to fall back
-	// to a large worst-case charge on code shapes it can't fully resolve, and the
-	// nullish-coalescing operator was the one thing unique to this file among the
-	// whole (otherwise clean) launch chain. A plain ternary sidesteps it.
-	return match === undefined ? null : match;
+	const candidates = reports.filter((r) => r.rooted && r.score > 0);
+	// /data/servers.json is already written in descending-score order by scan-root.ts, but
+	// re-sorting here is cheap and makes the working-set ordering below correct even if that
+	// ever changes - unlike the old single-target getTopTarget(), the whole priority order
+	// (not just "which one wins") is load-bearing now.
+	candidates.sort((a, b) => b.score - a.score);
+	return candidates;
 }
 
 // --- Dispatch model -----------------------------------------------------------------
 //
-// v1 dispatch is "proportional simultaneous WGH": every cycle, weaken/grow/hack thread
-// counts are computed together against the target's live state and launched in the same
-// cycle (not one script type per cycle, waiting the other two out) across the whole host
-// pool (home + every purchased server). Weaken sizing accounts for the security *this
+// Per-target dispatch is "proportional simultaneous WGH": every cycle, weaken/grow/hack
+// thread counts are computed together against the target's live state and launched in the
+// same cycle (not one script type per cycle, waiting the other two out) across the whole
+// host pool (home + every purchased server). Weaken sizing accounts for the security *this
 // cycle's own* grow+hack threads are about to add (via growthAnalyzeSecurity/
 // hackAnalyzeSecurity), not just the pre-existing excess - so a single cycle is
 // self-correcting instead of needing a dedicated follow-up weaken cycle.
@@ -63,16 +67,23 @@ function getTopTarget(ns: NS): ServerReport | null {
 // precalculated batch schedule (see project-state.md's dispatch-model decision for the
 // full research writeup). Proportional simultaneous dispatch gets most of the benefit
 // (all three op types in flight at once, sized off live server state) without that
-// fragility, and is the natural next step up from this script's old one-type-per-cycle
-// model. It's also intentionally single-target, same as before.
+// fragility.
+//
+// Multi-target: once the host pool's RAM exceeds what a single target's weaken+grow+hack
+// demand can absorb, the excess used to sit idle. The working set now grows dynamically -
+// see buildWorkingSet() - admitting the next-best-scored target from /data/servers.json only
+// while doing so still finds unmet RAM demand. Each admitted target gets its own dispatch
+// cadence (its own weaken/grow/hack durations, not one shared cycle throttled to the slowest
+// target) - but this is scheduled, not concurrent: Bitburner disallows any second ns.* call
+// while one is already in flight for a script, so there's no way to actually run one async
+// loop per target in the same process. Instead main() tracks a per-target nextDispatchAt
+// timestamp and, every tick, dispatches only the targets that are currently due, then sleeps
+// until the soonest one comes due - a single-threaded scheduler, not parallel loops.
 //
 // Future expansion path, when it's time to go further:
 //   - True HWGW batching: needs per-batch PID/finish-time tracking and sub-200ms-spaced
 //     launches (see the "starting from the end" timing approach in prior research), plus
 //     enough RAM per target that idle capacity between batches isn't the bottleneck.
-//   - Multi-target dispatch: split the host pool's RAM across the top N scored targets
-//     from /data/servers.json once a single target can no longer absorb available RAM
-//     (i.e. this cycle's weaken+grow+hack demand stops growing with added RAM).
 
 function getHostPool(ns: NS): string[] {
 	return ["home", ...ns.cloud.getServerNames()];
@@ -142,6 +153,56 @@ function computeThreadPlan(ns: NS, hostname: string): ThreadPlan {
 	return { weaken: weakenThreads, grow: growThreads, hack: hackThreads };
 }
 
+interface ScriptRamGb {
+	weaken: number;
+	grow: number;
+	hack: number;
+}
+
+function planRamGb(plan: ThreadPlan, scriptRamGb: ScriptRamGb): number {
+	return plan.weaken * scriptRamGb.weaken + plan.grow * scriptRamGb.grow + plan.hack * scriptRamGb.hack;
+}
+
+// The RAM cost of the cheapest single thread this plan actually calls for - i.e. the bar a
+// candidate must clear to be guaranteed at least one real thread, rather than being admitted
+// to the working set only to sit at 0 threads every cycle until RAM happens to free up.
+function minFundableThreadRamGb(plan: ThreadPlan, scriptRamGb: ScriptRamGb): number {
+	const costs: number[] = [];
+	if (plan.weaken > 0) costs.push(scriptRamGb.weaken);
+	if (plan.grow > 0) costs.push(scriptRamGb.grow);
+	if (plan.hack > 0) costs.push(scriptRamGb.hack);
+	return costs.length === 0 ? Infinity : Math.min(...costs);
+}
+
+// Builds the dynamic multi-target working set: the top-scored candidate is always admitted
+// (even at 0 free RAM - it still deserves its own loop so it grabs RAM the instant some frees
+// up), and each next-best-scored candidate after that is admitted only while the remaining
+// simulated pool can guarantee it at least one real thread. This is a coarse, whole-pool-total
+// approximation of dispatch()'s real per-host greedy fill (not a per-host bin-packed
+// simulation) - real dispatch() stays authoritative for actual thread launches every cycle
+// regardless, so this only affects how many targets get a loop, not correctness of what they
+// launch.
+function buildWorkingSet(ns: NS, candidates: ServerReport[], totalFreeRamGb: number, scriptRamGb: ScriptRamGb): ServerReport[] {
+	const workingSet: ServerReport[] = [];
+	let poolRemaining = totalFreeRamGb;
+
+	for (const candidate of candidates) {
+		const plan = computeThreadPlan(ns, candidate.hostname);
+		const needed = planRamGb(plan, scriptRamGb);
+		if (needed <= 0) continue;
+
+		if (workingSet.length > 0) {
+			const minRam = minFundableThreadRamGb(plan, scriptRamGb);
+			if (poolRemaining < minRam) break;
+		}
+
+		workingSet.push(candidate);
+		poolRemaining -= needed;
+	}
+
+	return workingSet;
+}
+
 function dispatch(ns: NS, script: string, desiredThreads: number, target: string, hosts: string[], freeRam: Map<string, number>): number {
 	if (desiredThreads < 1) return 0;
 
@@ -168,6 +229,28 @@ function dispatch(ns: NS, script: string, desiredThreads: number, target: string
 	}
 
 	return launched;
+}
+
+// Dispatches one target's weaken/grow/hack batch against the shared, progressively-drained
+// freeRam map for this tick, and returns the ms until this target should be dispatched again -
+// its own weaken/grow/hack duration, or NO_RAM_RETRY_MS if nothing launched at all.
+function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<string, number>): number {
+	const plan = computeThreadPlan(ns, hostname);
+	// Priority order when RAM is short: security first (weaken), then money (grow),
+	// then income (hack) - matches this repo's original threshold ordering.
+	const weakenLaunched = dispatch(ns, WEAKEN_SCRIPT, plan.weaken, hostname, hosts, freeRam);
+	const growLaunched = dispatch(ns, GROW_SCRIPT, plan.grow, hostname, hosts, freeRam);
+	const hackLaunched = dispatch(ns, HACK_SCRIPT, plan.hack, hostname, hosts, freeRam);
+
+	if (weakenLaunched < 1 && growLaunched < 1 && hackLaunched < 1) return NO_RAM_RETRY_MS;
+
+	return (
+		Math.max(
+			weakenLaunched > 0 ? ns.getWeakenTime(hostname) : 0,
+			growLaunched > 0 ? ns.getGrowTime(hostname) : 0,
+			hackLaunched > 0 ? ns.getHackTime(hostname) : 0,
+		) + LOOP_BUFFER_MS
+	);
 }
 
 export async function main(ns: NS): Promise<void> {
@@ -199,53 +282,94 @@ export async function main(ns: NS): Promise<void> {
 		}
 	}
 
-	let target = getTopTarget(ns);
-	if (!target) {
-		ns.tprint("controller: no rooted, hackable target found in /data/servers.json. Run scan-root.js first.");
-		return;
-	}
-
-	ns.tprint(`Now attacking ${target.hostname}!`);
-	let lastRetarget = Date.now();
+	// server-tree.js is deliberately NOT chain-launched (run it by hand when wanted), but its
+	// RAM still needs holding open so launching it later never has to wait on a batch to free up
+	// - queried live rather than hardcoded like DARKNET_RAM_RESERVE_GB, since this is one fixed
+	// script's own static cost rather than a variable multi-dispatch worst case.
+	const serverTreeReserveGb = ns.getScriptRam(SERVER_TREE_SCRIPT, "home");
+	const reserveGb = DARKNET_RAM_RESERVE_GB + serverTreeReserveGb;
+	const scriptRamGb: ScriptRamGb = {
+		weaken: ns.getScriptRam(WEAKEN_SCRIPT, "home"),
+		grow: ns.getScriptRam(GROW_SCRIPT, "home"),
+		hack: ns.getScriptRam(HACK_SCRIPT, "home"),
+	};
 	const syncedHosts = new Set<string>();
+	// Per-target dispatch schedule: hostname -> next Date.now() at which it's due for another
+	// weaken/grow/hack batch. A single-threaded scheduler, not concurrent loops - see the
+	// dispatch-model comment above for why (Bitburner disallows overlapping ns.* calls within
+	// one script, so true per-target concurrency isn't available here).
+	const nextDispatchAt = new Map<string, number>();
+	let workingSet: ServerReport[] = [];
+	let lastRetarget = 0;
+	let wasEmpty = false;
 
 	while (true) {
-		if (Date.now() - lastRetarget >= RETARGET_INTERVAL_MS) {
-			lastRetarget = Date.now();
-			const candidate = getTopTarget(ns);
-			if (candidate && candidate.hostname !== target.hostname) {
-				ns.tprint(`Now attacking ${candidate.hostname}!`);
-				target = candidate;
+		const now = Date.now();
+
+		if (now - lastRetarget >= RETARGET_INTERVAL_MS) {
+			lastRetarget = now;
+			const candidates = getCandidateTargets(ns);
+
+			if (candidates.length === 0) {
+				workingSet = [];
+				nextDispatchAt.clear();
+				if (!wasEmpty) {
+					ns.tprint("controller: no rooted, hackable target found in /data/servers.json. Run scan-root.js first.");
+				}
+				wasEmpty = true;
+			} else {
+				wasEmpty = false;
+
+				const hosts = getHostPool(ns);
+				syncWorkerScripts(ns, hosts, syncedHosts);
+				const sizingFreeRam = computeFreeRam(ns, hosts, reserveGb);
+				let totalFreeRamGb = 0;
+				for (const free of sizingFreeRam.values()) totalFreeRamGb += free;
+
+				workingSet = buildWorkingSet(ns, candidates, totalFreeRamGb, scriptRamGb);
+				const desiredHostnames = new Set(workingSet.map((t) => t.hostname));
+
+				for (const hostname of desiredHostnames) {
+					if (!nextDispatchAt.has(hostname)) {
+						ns.tprint(`Now attacking ${hostname}!`);
+						nextDispatchAt.set(hostname, now);
+					}
+				}
+				for (const hostname of [...nextDispatchAt.keys()]) {
+					if (desiredHostnames.has(hostname)) continue;
+					ns.tprint(`Dropping ${hostname} - out of working set (score or RAM)`);
+					nextDispatchAt.delete(hostname);
+				}
 			}
+		}
+
+		if (workingSet.length === 0) {
+			await ns.sleep(RETARGET_INTERVAL_MS);
+			continue;
 		}
 
 		const hosts = getHostPool(ns);
 		syncWorkerScripts(ns, hosts, syncedHosts);
+		// One shared, progressively-drained freeRam snapshot per tick - every target due this
+		// tick is dispatched against it in working-set (best-scored-first) order, so a higher-
+		// scored target's demand is fully funded before any leftover RAM cascades to the next.
+		const freeRam = computeFreeRam(ns, hosts, reserveGb);
 
-		// server-tree.js is deliberately NOT chain-launched (run it by hand when wanted), but its
-		// RAM still needs holding open so launching it later never has to wait on a batch to free up
-		// - queried live rather than hardcoded like DARKNET_RAM_RESERVE_GB, since this is one fixed
-		// script's own static cost rather than a variable multi-dispatch worst case.
-		const serverTreeReserveGb = ns.getScriptRam(SERVER_TREE_SCRIPT, "home");
-		const freeRam = computeFreeRam(ns, hosts, DARKNET_RAM_RESERVE_GB + serverTreeReserveGb);
+		let earliestNext = Infinity;
+		for (const target of workingSet) {
+			const dueAt = nextDispatchAt.get(target.hostname);
+			if (dueAt !== undefined && dueAt > now) {
+				earliestNext = Math.min(earliestNext, dueAt);
+				continue;
+			}
 
-		const plan = computeThreadPlan(ns, target.hostname);
-		// Priority order when RAM is short: security first (weaken), then money (grow),
-		// then income (hack) - matches this repo's original threshold ordering.
-		const weakenLaunched = dispatch(ns, WEAKEN_SCRIPT, plan.weaken, target.hostname, hosts, freeRam);
-		const growLaunched = dispatch(ns, GROW_SCRIPT, plan.grow, target.hostname, hosts, freeRam);
-		const hackLaunched = dispatch(ns, HACK_SCRIPT, plan.hack, target.hostname, hosts, freeRam);
-
-		if (weakenLaunched < 1 && growLaunched < 1 && hackLaunched < 1) {
-			await ns.sleep(NO_RAM_RETRY_MS);
-			continue;
+			const waitMs = dispatchTarget(ns, target.hostname, hosts, freeRam);
+			const next = now + waitMs;
+			nextDispatchAt.set(target.hostname, next);
+			earliestNext = Math.min(earliestNext, next);
 		}
 
-		const waitMs = Math.max(
-			weakenLaunched > 0 ? ns.getWeakenTime(target.hostname) : 0,
-			growLaunched > 0 ? ns.getGrowTime(target.hostname) : 0,
-			hackLaunched > 0 ? ns.getHackTime(target.hostname) : 0,
-		);
-		await ns.sleep(waitMs + LOOP_BUFFER_MS);
+		const sleepMs = Math.min(Math.max(earliestNext - Date.now(), MIN_LOOP_SLEEP_MS), RETARGET_INTERVAL_MS);
+		await ns.sleep(sleepMs);
 	}
 }

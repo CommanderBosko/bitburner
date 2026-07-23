@@ -78,29 +78,63 @@ function readServerReports(ns: NS): ServerReport[] {
 	return JSON.parse(raw) as ServerReport[];
 }
 
-function renderWorkerLines(ns: NS): string[] {
-	// Jobs can land on any purchased server as well as home now that controller.ts spreads
-	// weaken/grow/hack dispatch across the whole host pool - checking home only would make
-	// this HUD silently blind to most of the fleet's actual activity. Each job is paired
-	// with the host it's running on (not just flattened away) so every row can show where
-	// it landed - otherwise every pserv- box's jobs would be visually indistinguishable
-	// from each other and from home's.
-	const hosts = ["home", ...ns.cloud.getServerNames()];
-	const jobs = hosts.flatMap((host) =>
-		ns
-			.ps(host)
-			.filter((p) => WORKER_SCRIPTS.includes(p.filename))
-			.map((process) => ({ host, process })),
-	);
-	if (jobs.length === 0) return [row("Active jobs", "none")];
+interface TargetSummary {
+	weaken: number;
+	grow: number;
+	hack: number;
+	ramGb: number;
+}
 
-	return jobs.map(({ host, process }) => {
-		const stem = process.filename.split("/").pop();
-		const action = stem === undefined ? process.filename : stem.replace(".js", "");
-		const label = action === "hack" ? "Hack Target:" : action;
-		const target = process.args[0] === undefined ? "?" : String(process.args[0]);
-		return row(label, `${target} (${process.threads}t) @ ${host}`);
-	});
+// Jobs can land on any purchased server as well as home now that controller.ts spreads
+// weaken/grow/hack dispatch across the whole host pool - checking home only would make this
+// HUD silently blind to most of the fleet's actual activity. Since controller.ts now runs
+// multiple targets simultaneously (multi-target dispatch), jobs are grouped by target rather
+// than by host - a per-host listing would grow unbounded with N targets x M hosts x 3 script
+// types and blow past the tail window's fixed size.
+function collectTargetSummaries(ns: NS): Map<string, TargetSummary> {
+	const hosts = ["home", ...ns.cloud.getServerNames()];
+	const summaries = new Map<string, TargetSummary>();
+
+	for (const host of hosts) {
+		for (const process of ns.ps(host)) {
+			if (!WORKER_SCRIPTS.includes(process.filename)) continue;
+
+			const stem = process.filename.split("/").pop();
+			const action = stem === undefined ? process.filename : stem.replace(".js", "");
+			const target = process.args[0] === undefined ? "?" : String(process.args[0]);
+
+			const existing = summaries.get(target);
+			const summary: TargetSummary = existing === undefined ? { weaken: 0, grow: 0, hack: 0, ramGb: 0 } : existing;
+			if (action === "weaken") summary.weaken += process.threads;
+			else if (action === "grow") summary.grow += process.threads;
+			else if (action === "hack") summary.hack += process.threads;
+			summary.ramGb += process.threads * ns.getScriptRam(process.filename, host);
+			summaries.set(target, summary);
+		}
+	}
+
+	return summaries;
+}
+
+function scoreRank(scoreOrder: Map<string, number>, hostname: string): number {
+	const rank = scoreOrder.get(hostname);
+	return rank === undefined ? Number.MAX_SAFE_INTEGER : rank;
+}
+
+function renderWorkingSetLines(ns: NS): string[] {
+	const summaries = collectTargetSummaries(ns);
+	if (summaries.size === 0) return [row("Working set:", "none")];
+
+	// Sorted by the same score order controller.ts admits targets in, so the busiest/most
+	// valuable target always appears first regardless of ns.ps()'s host-scan order.
+	const scoreOrder = new Map(readServerReports(ns).map((r, i) => [r.hostname, i]));
+	const entries = [...summaries.entries()].sort((a, b) => scoreRank(scoreOrder, a[0]) - scoreRank(scoreOrder, b[0]));
+
+	const lines = ["--- Working Set ---"];
+	for (const [target, summary] of entries) {
+		lines.push(row(`${target}:`, `W:${summary.weaken} G:${summary.grow} H:${summary.hack} (${formatRam(summary.ramGb)})`));
+	}
+	return lines;
 }
 
 function renderRootLine(ns: NS): string {
@@ -168,7 +202,7 @@ function renderFrame(ns: NS, incomePerMinute: number, sourceLines: string[]): st
 		...sourceLines,
 		renderRootLine(ns),
 		renderRamLine(ns),
-		...renderWorkerLines(ns),
+		...renderWorkingSetLines(ns),
 	];
 	return lines.join("\n");
 }
