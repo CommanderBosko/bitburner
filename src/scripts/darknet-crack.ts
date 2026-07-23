@@ -1,5 +1,5 @@
 import type { NS } from "../NetscriptDefinitions";
-import type { DarknetCrackResultMessage } from "../lib/darknet-ports";
+import type { DarknetCrackResultMessage, DarknetHopFailedMessage } from "../lib/darknet-ports";
 
 // No real (non-`import type`) imports from src/lib/ in this file: this script gets scp'd onto
 // remote darknet servers and exec'd there, and only its own file is copied - a runtime import
@@ -30,17 +30,28 @@ export async function main(ns: NS): Promise<void> {
 	if (remainingPath.length > 0) {
 		const next = remainingPath[0];
 		const rest = remainingPath.slice(1);
-		if (next.password !== null) {
-			const connectResult = ns.dnet.connectToSession(next.host, next.password);
-			if (!connectResult.success) {
-				ns.print(`darknet-crack: connectToSession(${next.host}) failed - ${connectResult.message}`);
-				return;
+		try {
+			if (next.password !== null) {
+				const connectResult = ns.dnet.connectToSession(next.host, next.password);
+				if (!connectResult.success) {
+					ns.print(`darknet-crack: connectToSession(${next.host}) failed - ${connectResult.message}`);
+					return;
+				}
 			}
-		}
-		ns.scp(OWN_SCRIPT, next.host, "home");
-		const pid = ns.exec(OWN_SCRIPT, next.host, { threads: 1, preventDuplicates: true }, JSON.stringify(rest), targetHost, batchJson);
-		if (pid === 0) {
-			ns.print(`darknet-crack: failed to exec onto ${next.host} - check RAM`);
+			ns.scp(OWN_SCRIPT, next.host, "home");
+			const pid = ns.exec(OWN_SCRIPT, next.host, { threads: 1, preventDuplicates: true }, JSON.stringify(rest), targetHost, batchJson);
+			if (pid === 0) {
+				ns.print(`darknet-crack: failed to exec onto ${next.host} - check RAM`);
+			}
+		} catch (error) {
+			// The darknet is unstable - servers can move or go offline between the manager building
+			// this dispatch path and it landing here, which throws ("Invalid host") rather than a
+			// graceful {success:false} from dnet/scp/exec given a hop that no longer exists. Treat
+			// it as a stale path and drop this dispatch instead of crashing the whole script, and
+			// tell the manager so it stops rebuilding paths through this now-dead hop.
+			ns.print(`darknet-crack: hop to ${next.host} failed (path likely stale) - ${String(error)}`);
+			const hopFailedMessage: DarknetHopFailedMessage = { kind: "hopFailed", hostname: next.host, reason: String(error) };
+			ns.writePort(DARKNET_REPORT_PORT, hopFailedMessage);
 		}
 		return;
 	}

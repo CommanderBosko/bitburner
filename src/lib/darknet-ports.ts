@@ -47,4 +47,18 @@ export interface DarknetValueResultMessage {
 	cacheFilesSeen: number;
 }
 
-export type DarknetReportMessage = DarknetDiscoveryMessage | DarknetCrackResultMessage | DarknetValueResultMessage;
+// Reported when a hop-walking script's connectToSession/scp/exec throws mid-path instead of
+// returning a graceful failure - the darknet is unstable and a hop can vanish between the
+// manager building this dispatch path and it landing here. `hostname` is the hop that failed,
+// which may be an ancestor of the actual dispatch target, not the target itself.
+export interface DarknetHopFailedMessage {
+	kind: "hopFailed";
+	hostname: string;
+	reason: string;
+}
+
+export type DarknetReportMessage =
+	| DarknetDiscoveryMessage
+	| DarknetCrackResultMessage
+	| DarknetValueResultMessage
+	| DarknetHopFailedMessage;

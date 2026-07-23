@@ -63,7 +63,10 @@ function saveKnowledgeBase(ns: NS, kb: DarknetKnowledgeBase): void {
 function buildPathTo(kb: DarknetKnowledgeBase, hostname: string): PathHop[] | undefined {
 	if (hostname === "home") return [];
 	const entry = kb.servers[hostname];
-	if (!entry || entry.password === undefined) return undefined;
+	// "unresolvable" also covers hop-failed servers (see applyHopFailed) - excluding them here,
+	// not just at the dispatch-target level, prunes every deeper descendant that would otherwise
+	// keep getting a path built straight through this now-dead hop.
+	if (!entry || entry.password === undefined || entry.status === "unresolvable") return undefined;
 	const parentPath = buildPathTo(kb, entry.parentHost);
 	if (parentPath === undefined) return undefined;
 	return [...parentPath, { host: hostname, password: entry.password }];
@@ -99,6 +102,15 @@ function estimatedKeyspace(entry: DarknetServerEntry): number {
 function applyDiscovery(kb: DarknetKnowledgeBase, msg: Extract<DarknetReportMessage, { kind: "discovery" }>): boolean {
 	const existing = kb.servers[msg.hostname];
 	if (existing) {
+		// A hop-failed server can still turn back up here: this fires when *its own parent*
+		// gets re-recon'd and lists it as a child again, which is direct evidence it's actually
+		// still there - recover it rather than leaving it permanently pruned. (Keyspace-exhausted
+		// unresolvable servers use a different reactivation path - patternsSnapshotCount, in the
+		// main loop below - and are left alone here.)
+		if (existing.status === "unresolvable" && existing.unresolvableReason?.startsWith("hop failed")) {
+			existing.status = existing.password !== undefined ? "cracked" : "probed";
+			existing.unresolvableReason = undefined;
+		}
 		existing.depth = msg.depth;
 		existing.modelId = msg.modelId;
 		existing.passwordFormat = msg.passwordFormat;
@@ -210,10 +222,29 @@ function applyValueResult(kb: DarknetKnowledgeBase, msg: Extract<DarknetReportMe
 	entry.lastValueCheckCycle = cycle;
 }
 
-function drainReports(ns: NS, kb: DarknetKnowledgeBase, cycle: number): { discovered: number; cracked: string[]; valueChecked: number } {
+// A hop-walking script hit a dead/moved server mid-path (see DarknetHopFailedMessage). Mark it
+// unresolvable so buildPathTo stops routing through it - deliberately leaves
+// patternsSnapshotCount unset (unlike the keyspace-exhausted case in the main loop below), since
+// that field is what makes selectCrackTarget re-offer an unresolvable server once the pattern
+// table has grown; a broken hop won't be fixed by learning better passwords, so it never
+// automatically reactivates.
+function applyHopFailed(kb: DarknetKnowledgeBase, msg: Extract<DarknetReportMessage, { kind: "hopFailed" }>): boolean {
+	const entry = kb.servers[msg.hostname];
+	if (!entry || entry.status === "unresolvable") return false;
+	entry.status = "unresolvable";
+	entry.unresolvableReason = `hop failed: ${msg.reason}`;
+	return true;
+}
+
+function drainReports(
+	ns: NS,
+	kb: DarknetKnowledgeBase,
+	cycle: number,
+): { discovered: number; cracked: string[]; valueChecked: number; hopFailures: string[] } {
 	let discovered = 0;
 	const cracked: string[] = [];
 	let valueChecked = 0;
+	const hopFailures: string[] = [];
 
 	while (true) {
 		const message = ns.readPort(DARKNET_REPORT_PORT) as DarknetReportMessage | "NULL PORT DATA";
@@ -226,10 +257,12 @@ function drainReports(ns: NS, kb: DarknetKnowledgeBase, cycle: number): { discov
 		} else if (message.kind === "valueResult") {
 			applyValueResult(kb, message, cycle);
 			valueChecked++;
+		} else if (message.kind === "hopFailed") {
+			if (applyHopFailed(kb, message)) hopFailures.push(message.hostname);
 		}
 	}
 
-	return { discovered, cracked, valueChecked };
+	return { discovered, cracked, valueChecked, hopFailures };
 }
 
 function selectValueTargets(kb: DarknetKnowledgeBase, cycle: number, limit: number): DarknetServerEntry[] {
@@ -339,7 +372,7 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
-		const { discovered, cracked, valueChecked } = drainReports(ns, kb, cycle);
+		const { discovered, cracked, valueChecked, hopFailures } = drainReports(ns, kb, cycle);
 		if (discovered > 0) ns.print(`darknet-manager: discovered ${discovered} new server(s)`);
 		for (const host of cracked) {
 			// tprint persists in the terminal; toast fades after a few seconds and is easy to
@@ -348,6 +381,9 @@ export async function main(ns: NS): Promise<void> {
 			ns.toast(`darknet: cracked ${host}`, "success");
 		}
 		if (valueChecked > 0) ns.print(`darknet-manager: ${valueChecked} value pass(es) reported`);
+		for (const host of hopFailures) {
+			ns.print(`darknet-manager: ${host} marked unresolvable (hop failed) - no longer used in dispatch paths`);
+		}
 
 		// Depth-first as a priority *order*, not a hard gate: value/recon dispatch first each
 		// cycle so they get first claim on whatever RAM is available, but a crack attempt is
