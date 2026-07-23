@@ -1,3 +1,32 @@
+## Session: 2026-07-23 — Darknet crash fix, scaffold-loop.sh bug actually fixed, server-tree un-chained
+
+**Focus**: Ran skill-upgrade/skill-suggestion over the backlog since the last close, then fixed a live in-game darknet crash the user hit, then took `server-tree.ts` back out of the chain-launch.
+
+### What changed (and why)
+- Ran `skill-upgrade` scoped to activity since its last real invocation (2026-07-21): found `new-background-loop`'s `scaffold-loop.sh` had a documented Gotcha for a `sed a\` multi-line-corruption bug, but the prescribed fix was never actually applied to the script — so it recurred identically on the next scaffold call. Fixed it for real this time (temp-file + sed `r`), verified against a scratch clone of the repo, not just re-documented.
+- Ran `skill-suggestion` over the same window: proposed and built `commit-and-push` (chains the existing `git-commit`/`git-push` skills) — lives in the NixOS dotfiles repo, not this one, since it's a general git workflow.
+- Committed a pre-existing uncommitted change from before this session: `hacknet-manager.ts`'s `moneyGainRate` now calls `ns.formulas.hacknetNodes.moneyGainRate()` directly, now that `Formulas.exe` is owned.
+- User reported a live in-game runtime error: `dnet.connectToSession: Invalid host: 'chongq1ng'` crashing `darknet-agent-value.js`. Root-caused to `connectToSession` throwing (not returning a graceful failure) when a hop has moved/gone offline mid-path — a gap in the existing "servers can go offline" defensive pattern, which only covered the final crack target, not intermediate hops. Fixed all three worker scripts (recon/value/crack) with try/catch, then (on request) closed the loop: workers report the failure back to `darknet-manager.ts` via a new `hopFailed` port message, which marks that hop `unresolvable` (pruning every deeper descendant too via `buildPathTo`) and auto-recovers it if legitimately rediscovered later.
+- Took `server-tree.ts` back out of the chain-launch per user request — they want to launch it manually, not have it auto-start. Its RAM cost is still reserved (via live `ns.getScriptRam`, not hardcoded) so a manual launch is never blocked.
+- Along the way, updated the `git-commit` skill (NixOS repo) to ask before silently leaving unrelated uncommitted work out of a commit, after it had done exactly that with the `hacknet-manager.ts` change above.
+- Refreshed `project-state.md`, which had drifted behind 4 commits from a prior unclosed session (`2039b97`..`65790c7`: hacknet payback-cap revert, darknet automation, server-tree chain-launch) — folded those into the docs from commit history, without inventing rationale beyond what's in those commits.
+
+### Decisions
+- A documented gotcha with an unapplied fix behaves like an undocumented one — when `skill-upgrade` finds this pattern, apply the fix in the same pass rather than re-describing it.
+- Hop-failure handling in the darknet scripts: mark the hop `unresolvable` (reusing the existing status field, not a new one) rather than deleting it from the knowledge base outright, so it can recover automatically if rediscovered.
+
+### Issues / surprises
+- The `scaffold-loop.sh` bug's "documented but unfixed" gap was only found because `git log`/`controller.ts` showed both `battlestation.ts` and `server-tree.ts` had been hard-wired directly into `controller.ts` instead of the automatic chain-tail — strong indirect evidence the automatic wiring had failed both times.
+
+### Next session
+- Watch `darknet-manager` logs in-game for `marked unresolvable (hop failed)` to confirm the fix actually fires and prunes correctly, not just compiles clean.
+- Re-verify chain-script RAM costs via in-game `mem` — `battlestation.ts`, `backdoor-loop.ts`, and the darknet scripts are all still estimated, not measured.
+- Run `server-tree.js` manually whenever a network-tree view is wanted; it's no longer auto-launched.
+
+**Commits**: `77b8f53..957e591` (4 commits this session; 4 earlier commits since the last close — `2039b97`, `2f6f848`, `83eb468`, `65790c7` — belong to a prior session that wasn't closed out, not to this one)
+
+---
+
 ## Session: 2026-07-21 — Hacknet ROI Q&A; capped hacknet-manager purchases at a 30-min payback period
 
 **Focus**: Answer whether Hacknet is the best early-game money-maker, then fix the observed overspend once the user noticed cumulative Hacknet spend exceeding cumulative income.
