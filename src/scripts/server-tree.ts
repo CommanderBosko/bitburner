@@ -1,10 +1,9 @@
 import type { NS } from "../NetscriptDefinitions";
 
 const REFRESH_INTERVAL_MS = 2000;
-const TAIL_WIDTH = 420;
-const TAIL_HEIGHT = 400;
-const TAIL_X = 0;
-const TAIL_Y = 280;
+const TAIL_WIDTH = 1000;
+const TAIL_HEIGHT = 800;
+const TAIL_MARGIN = 10;
 
 function statusTag(ns: NS, host: string): string {
 	const rooted = ns.hasRootAccess(host);
@@ -35,7 +34,7 @@ export async function main(ns: NS): Promise<void> {
 	ns.disableLog("ALL");
 	ns.ui.openTail();
 	ns.ui.resizeTail(TAIL_WIDTH, TAIL_HEIGHT);
-	ns.ui.moveTail(TAIL_X, TAIL_Y);
+	ns.ui.moveTail(TAIL_MARGIN, TAIL_MARGIN);
 
 	let lastFrame = "";
 
