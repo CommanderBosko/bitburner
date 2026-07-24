@@ -11,20 +11,19 @@ const BATTLESTATION_SCRIPT = "scripts/battlestation.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 // Consumed by server-purchase-manager.ts to stop buying/upgrading once purchased-server
-// capacity already covers every known target's weaken+grow+hack demand - see the
-// computeTotalDemandGb comment below for what "demand" means here.
+// capacity already covers every known target's weaken+grow+hack demand - see
+// estimateTargetDemandGb for what "demand" means here.
 const RAM_DEMAND_FILE = "/data/ram-demand.json";
 const SECURITY_TOLERANCE = 5;
 const MONEY_THRESHOLD = 0.75;
 // Fraction of a target's current max money that a single hack cycle steals. Lowered from an
 // initial 0.5 (2026-07-23): stealing half forced a 2x growMultiplier every cycle, a long regrow
 // phase that left hack threads rarely computed at all relative to weaken/grow (see
-// computeThreadPlan - hackThreads only gets set once security is in tolerance AND money is
-// back above MONEY_THRESHOLD, and a 2x regrow spends a lot of time not meeting that bar). At
-// 0.1, each hack leaves money at ~90% of max, so growMultiplier is only ~1.11x - a quick top-up
-// instead of a long regrow - keeping the target hack-eligible far more of the time. Matches
-// the community-standard "small percentage, high frequency" approach over "big percentage,
-// rare" (see project-state.md's dispatch-model decision).
+// computePrepPlan - prep only runs weaken/grow, and a target stayed in prep far more of the
+// time at 0.5). At 0.1, each hack leaves money at ~90% of max, so growMultiplier is only
+// ~1.11x - a quick top-up instead of a long regrow - keeping the target batch-eligible far more
+// of the time. Matches the community-standard "small percentage, high frequency" approach over
+// "big percentage, rare" (see project-state.md's dispatch-model decision).
 const HACK_MONEY_FRACTION = 0.1;
 const LOOP_BUFFER_MS = 200;
 const NO_RAM_RETRY_MS = 5000;
@@ -34,6 +33,14 @@ const RETARGET_INTERVAL_MS = 30000;
 const MIN_LOOP_SLEEP_MS = 50;
 const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
+// Minimum spacing between the four landing times within one HWGW batch (see computeBatchPlan) -
+// small enough not to waste idle time, large enough to survive ordinary scheduler jitter so
+// operations from the same batch can't land out of order.
+const BATCH_GAP_MS = 20;
+// Floor on how often a new batch may be queued for the same target, independent of RAM - see
+// computeBatchPlan's periodMs and dispatchTarget's comment for why timing, not RAM, is what
+// ultimately caps how many batches can usefully be in flight against one target at once.
+const MIN_BATCH_PERIOD_MS = 4 * BATCH_GAP_MS;
 // Headroom for darknet-manager's own ns.exec dispatches, which this loop would otherwise starve
 // out by claiming all available home RAM every cycle. darknet-manager can fire up to 3
 // value + 2 recon dispatches per cycle (see VALUE/RECON_DISPATCH_PER_CYCLE), but reserving
@@ -61,38 +68,38 @@ function getCandidateTargets(ns: NS): ServerReport[] {
 
 // --- Dispatch model -----------------------------------------------------------------
 //
-// Per-target dispatch is "proportional simultaneous WGH": every cycle, weaken/grow/hack
-// thread counts are computed together against the target's live state and launched in the
-// same cycle (not one script type per cycle, waiting the other two out) across the whole
-// host pool (home + every purchased server). Weaken sizing accounts for the security *this
-// cycle's own* grow+hack threads are about to add (via growthAnalyzeSecurity/
-// hackAnalyzeSecurity), not just the pre-existing excess - so a single cycle is
-// self-correcting instead of needing a dedicated follow-up weaken cycle.
+// Per-target dispatch is a two-phase model: prep, then HWGW batching.
 //
-// This was a deliberate choice over full timed HWGW batching (hack->weaken->grow->weaken
-// landing in a precisely-spaced sequence), which multiple sources agreed gives the true
-// income ceiling but only pays off past roughly >1TB of RAM per target and is fragile in
-// practice - rising hacking level shortens op durations over time and desyncs a
-// precalculated batch schedule (see project-state.md's dispatch-model decision for the
-// full research writeup). Proportional simultaneous dispatch gets most of the benefit
-// (all three op types in flight at once, sized off live server state) without that
-// fragility.
+// A target that just got rooted (or was recently over-hacked) has its security above minimum
+// and/or money below the MONEY_THRESHOLD floor - see isPrimed. While that's true, dispatch runs
+// plain continuous weaken/grow against its live state (computePrepPlan), the same one-round-at-
+// a-time model this file always used, and waits the full round out before trying again.
 //
-// Multi-target: once the host pool's RAM exceeds what a single target's weaken+grow+hack
-// demand can absorb, the excess used to sit idle. The working set now grows dynamically -
-// see buildWorkingSet() - admitting the next-best-scored target from /data/servers.json only
-// while doing so still finds unmet RAM demand. Each admitted target gets its own dispatch
-// cadence (its own weaken/grow/hack durations, not one shared cycle throttled to the slowest
-// target) - but this is scheduled, not concurrent: Bitburner disallows any second ns.* call
-// while one is already in flight for a script, so there's no way to actually run one async
-// loop per target in the same process. Instead main() tracks a per-target nextDispatchAt
-// timestamp and, every tick, dispatches only the targets that are currently due, then sleeps
-// until the soonest one comes due - a single-threaded scheduler, not parallel loops.
+// Once primed, dispatch switches to true HWGW batching (computeBatchPlan/dispatchBatch): each
+// batch is a self-contained hack -> weaken -> grow -> weaken sequence, sized and timed so its
+// own weaken1 fully offsets its own hack's security gain and its own weaken2 fully offsets its
+// own grow's - independent of any other batch. Batches are queued every MIN_BATCH_PERIOD_MS
+// (far shorter than any single batch's own duration), so many batches are in flight at once,
+// each landing in its own slot - that's what lets a target's dispatch loop actually absorb
+// large amounts of RAM instead of sitting idle between one full WGH round and the next. This
+// was the fragility multiple sources flagged for batching in general (rising hacking level
+// shortens op durations over time and can desync a precalculated schedule) - mitigated here by
+// computing each batch's delays fresh, from live getWeakenTime/getGrowTime/getHackTime, right
+// before that specific batch launches, rather than precomputing a long queue in advance.
 //
-// Future expansion path, when it's time to go further:
-//   - True HWGW batching: needs per-batch PID/finish-time tracking and sub-200ms-spaced
-//     launches (see the "starting from the end" timing approach in prior research), plus
-//     enough RAM per target that idle capacity between batches isn't the bottleneck.
+// Multi-target: once the host pool's RAM exceeds what a single target's demand can absorb, the
+// excess used to sit idle. The working set grows dynamically - see buildWorkingSet() - admitting
+// the next-best-scored target from /data/servers.json only while doing so still finds unmet RAM
+// demand (estimateTargetDemandGb). For a primed target, that demand ceiling is no longer "one
+// round's worth" but the full batch-pipeline ceiling: as many concurrent batches as
+// MIN_BATCH_PERIOD_MS timing allows, regardless of how much RAM is actually available - RAM
+// scarcity is handled separately, by dispatchBatch simply declining to launch a batch it can't
+// fully fund (see there for why a partial batch is worse than no batch). Each admitted target
+// gets its own dispatch cadence - but this is scheduled, not concurrent: Bitburner disallows any
+// second ns.* call while one is already in flight for a script, so there's no way to actually
+// run one async loop per target in the same process. Instead main() tracks a per-target
+// nextDispatchAt timestamp and, every tick, dispatches only the targets that are currently due,
+// then sleeps until the soonest one comes due - a single-threaded scheduler, not parallel loops.
 
 function getHostPool(ns: NS): string[] {
 	return ["home", ...ns.cloud.getServerNames()];
@@ -129,49 +136,105 @@ function computeCapacityGb(ns: NS, hosts: string[], homeReserveGb: number): numb
 	return total;
 }
 
-interface ThreadPlan {
-	weaken: number;
-	grow: number;
-	hack: number;
+function isPrimed(ns: NS, hostname: string): boolean {
+	const security = ns.getServerSecurityLevel(hostname);
+	const minSecurity = ns.getServerMinSecurityLevel(hostname);
+	const money = ns.getServerMoneyAvailable(hostname);
+	const maxMoney = ns.getServerMaxMoney(hostname);
+	return security - minSecurity <= SECURITY_TOLERANCE && money >= maxMoney * MONEY_THRESHOLD;
 }
 
-function computeThreadPlan(ns: NS, hostname: string): ThreadPlan {
+interface PrepPlan {
+	weaken: number;
+	grow: number;
+}
+
+// Continuous prep: restore money and clear security on a target that isn't primed yet (see
+// isPrimed). Not batched - just plain weaken/grow sized off live state, one round at a time.
+function computePrepPlan(ns: NS, hostname: string): PrepPlan {
 	const security = ns.getServerSecurityLevel(hostname);
 	const minSecurity = ns.getServerMinSecurityLevel(hostname);
 	const money = ns.getServerMoneyAvailable(hostname);
 	const maxMoney = ns.getServerMaxMoney(hostname);
 
 	const excessSecurity = security - minSecurity;
-	const needsPrepWeaken = excessSecurity > SECURITY_TOLERANCE;
-	const needsGrow = money < maxMoney * MONEY_THRESHOLD;
-
 	let growThreads = 0;
-	let hackThreads = 0;
-
-	if (needsPrepWeaken || needsGrow) {
-		// Prep/grow cycle: restore money in parallel with clearing security, but don't
-		// start hacking again until both are back in tolerance.
-		if (needsGrow && maxMoney > 0) {
-			const growMultiplier = money > 0 ? maxMoney / money : maxMoney;
-			growThreads = Math.max(0, Math.ceil(ns.growthAnalyze(hostname, growMultiplier)));
-		}
-	} else {
-		// Hack cycle: steal a fixed fraction of current money, and pre-queue exactly the
-		// grow threads needed to refill what this cycle's hack is about to remove - so the
-		// next cycle doesn't need a separate full grow phase.
-		hackThreads = Math.max(0, Math.floor(ns.hackAnalyzeThreads(hostname, maxMoney * HACK_MONEY_FRACTION)));
-		if (hackThreads > 0) {
-			const growMultiplier = 1 / (1 - HACK_MONEY_FRACTION);
-			growThreads = Math.max(0, Math.ceil(ns.growthAnalyze(hostname, growMultiplier)));
-		}
+	if (money < maxMoney * MONEY_THRESHOLD && maxMoney > 0) {
+		const growMultiplier = money > 0 ? maxMoney / money : maxMoney;
+		growThreads = Math.max(0, Math.ceil(ns.growthAnalyze(hostname, growMultiplier)));
 	}
 
-	const addedSecurity = ns.growthAnalyzeSecurity(growThreads, hostname) + ns.hackAnalyzeSecurity(hackThreads, hostname);
+	const addedSecurity = ns.growthAnalyzeSecurity(growThreads, hostname);
 	const securityToClear = Math.max(0, excessSecurity) + addedSecurity;
 	const weakenPerThread = ns.weakenAnalyze(1);
 	const weakenThreads = securityToClear > 0 && weakenPerThread > 0 ? Math.ceil(securityToClear / weakenPerThread) : 0;
 
-	return { weaken: weakenThreads, grow: growThreads, hack: hackThreads };
+	return { weaken: weakenThreads, grow: growThreads };
+}
+
+interface BatchPlan {
+	hackThreads: number;
+	weaken1Threads: number;
+	growThreads: number;
+	weaken2Threads: number;
+	hackDelayMs: number;
+	weaken1DelayMs: number;
+	growDelayMs: number;
+	weaken2DelayMs: number;
+	periodMs: number;
+	batchDurationMs: number;
+}
+
+// Computes one HWGW batch against an already-primed target (security at min, money at max -
+// see isPrimed). Threads are sized so this batch's own weaken1 fully offsets its own hack's
+// security gain, and weaken2 fully offsets its own grow's - each batch is self-contained and
+// doesn't depend on any other in-flight batch's operations landing in between.
+//
+// Delays use the standard HWGW layout, timed backwards from weakenTime T (always the longest of
+// the three base op durations): weaken1 anchors at delay 0 (lands at T), and hack/grow/weaken2
+// are delayed so the landing order is hack (T-4g) -> weaken1 (T) -> grow (T+g) -> weaken2
+// (T+2g), each at least BATCH_GAP_MS (g) apart so operations from the same batch can't land out
+// of order even with a bit of scheduler jitter.
+function computeBatchPlan(ns: NS, hostname: string): BatchPlan | null {
+	const maxMoney = ns.getServerMaxMoney(hostname);
+	if (maxMoney <= 0) return null;
+
+	const weakenPerThread = ns.weakenAnalyze(1);
+	if (weakenPerThread <= 0) return null;
+
+	const hackThreads = Math.max(1, Math.floor(ns.hackAnalyzeThreads(hostname, maxMoney * HACK_MONEY_FRACTION)));
+	const weaken1Threads = Math.max(1, Math.ceil(ns.hackAnalyzeSecurity(hackThreads, hostname) / weakenPerThread));
+
+	const growMultiplier = 1 / (1 - HACK_MONEY_FRACTION);
+	const growThreads = Math.max(1, Math.ceil(ns.growthAnalyze(hostname, growMultiplier)));
+	const weaken2Threads = Math.max(1, Math.ceil(ns.growthAnalyzeSecurity(growThreads, hostname) / weakenPerThread));
+
+	const weakenTime = ns.getWeakenTime(hostname);
+	const growTime = ns.getGrowTime(hostname);
+	const hackTime = ns.getHackTime(hostname);
+
+	const weaken1DelayMs = 0;
+	const hackDelayMs = weakenTime - 4 * BATCH_GAP_MS - hackTime;
+	const growDelayMs = weakenTime + BATCH_GAP_MS - growTime;
+	const weaken2DelayMs = 2 * BATCH_GAP_MS;
+	// Hacking level too low relative to the gap for this target right now (hackTime/growTime too
+	// close to weakenTime to fit the layout) - skip this cycle rather than launch a batch with an
+	// invalid negative delay; a future cycle (higher hacking level, or a re-scored target) will
+	// retry.
+	if (hackDelayMs < 0 || growDelayMs < 0) return null;
+
+	return {
+		hackThreads,
+		weaken1Threads,
+		growThreads,
+		weaken2Threads,
+		hackDelayMs,
+		weaken1DelayMs,
+		growDelayMs,
+		weaken2DelayMs,
+		periodMs: MIN_BATCH_PERIOD_MS,
+		batchDurationMs: weakenTime + 2 * BATCH_GAP_MS,
+	};
 }
 
 interface ScriptRamGb {
@@ -180,41 +243,73 @@ interface ScriptRamGb {
 	hack: number;
 }
 
-function planRamGb(plan: ThreadPlan, scriptRamGb: ScriptRamGb): number {
-	return plan.weaken * scriptRamGb.weaken + plan.grow * scriptRamGb.grow + plan.hack * scriptRamGb.hack;
+function prepRamGb(plan: PrepPlan, scriptRamGb: ScriptRamGb): number {
+	return plan.weaken * scriptRamGb.weaken + plan.grow * scriptRamGb.grow;
 }
 
-// The RAM cost of the cheapest single thread this plan actually calls for - i.e. the bar a
-// candidate must clear to be guaranteed at least one real thread, rather than being admitted
-// to the working set only to sit at 0 threads every cycle until RAM happens to free up.
-function minFundableThreadRamGb(plan: ThreadPlan, scriptRamGb: ScriptRamGb): number {
-	const costs: number[] = [];
-	if (plan.weaken > 0) costs.push(scriptRamGb.weaken);
-	if (plan.grow > 0) costs.push(scriptRamGb.grow);
-	if (plan.hack > 0) costs.push(scriptRamGb.hack);
-	return costs.length === 0 ? Infinity : Math.min(...costs);
+function batchRamGb(plan: BatchPlan, scriptRamGb: ScriptRamGb): number {
+	return (
+		plan.hackThreads * scriptRamGb.hack +
+		(plan.weaken1Threads + plan.weaken2Threads) * scriptRamGb.weaken +
+		plan.growThreads * scriptRamGb.grow
+	);
+}
+
+// Per-target RAM demand estimate used for working-set admission and the purchase-manager
+// ceiling: prep-phase targets use one continuous weaken+grow round (transient, so a rough
+// one-round estimate is fine), while primed targets use their full batch-pipeline ceiling - as
+// many concurrent HWGW batches as timing allows (batchDurationMs / periodMs), regardless of RAM
+// - see the dispatch-model comment above for why that timing floor, not RAM, is what ultimately
+// caps useful concurrency per target.
+function estimateTargetDemandGb(ns: NS, hostname: string, scriptRamGb: ScriptRamGb): number {
+	if (!isPrimed(ns, hostname)) {
+		return prepRamGb(computePrepPlan(ns, hostname), scriptRamGb);
+	}
+
+	const plan = computeBatchPlan(ns, hostname);
+	if (!plan) return 0;
+
+	const maxConcurrentBatches = Math.max(1, Math.floor(plan.batchDurationMs / plan.periodMs));
+	return batchRamGb(plan, scriptRamGb) * maxConcurrentBatches;
+}
+
+// The RAM cost of the smallest unit that actually guarantees this target real progress: one
+// funded thread for a prep target (partial prep dispatch is still useful), or one whole batch
+// for a primed target (dispatchBatch launches nothing at all unless every operation is fully
+// funded - see there for why). Used by buildWorkingSet as the bar a candidate must clear to be
+// admitted, rather than being admitted only to sit at zero every cycle until RAM frees up.
+function minFundableUnitRamGb(ns: NS, hostname: string, scriptRamGb: ScriptRamGb): number {
+	if (!isPrimed(ns, hostname)) {
+		const plan = computePrepPlan(ns, hostname);
+		const costs: number[] = [];
+		if (plan.weaken > 0) costs.push(scriptRamGb.weaken);
+		if (plan.grow > 0) costs.push(scriptRamGb.grow);
+		return costs.length === 0 ? Infinity : Math.min(...costs);
+	}
+
+	const plan = computeBatchPlan(ns, hostname);
+	return plan ? batchRamGb(plan, scriptRamGb) : Infinity;
 }
 
 // Builds the dynamic multi-target working set: the top-scored candidate is always admitted
 // (even at 0 free RAM - it still deserves its own loop so it grabs RAM the instant some frees
 // up), and each next-best-scored candidate after that is admitted only while the remaining
-// simulated pool can guarantee it at least one real thread. This is a coarse, whole-pool-total
-// approximation of dispatch()'s real per-host greedy fill (not a per-host bin-packed
-// simulation) - real dispatch() stays authoritative for actual thread launches every cycle
-// regardless, so this only affects how many targets get a loop, not correctness of what they
-// launch.
+// simulated pool can guarantee it at least one fundable unit (minFundableUnitRamGb). This is a
+// coarse, whole-pool-total approximation of dispatch()'s real per-host greedy fill (not a
+// per-host bin-packed simulation) - real dispatchTarget()/dispatchBatch() stay authoritative for
+// actual thread launches every cycle regardless, so this only affects how many targets get a
+// loop, not correctness of what they launch.
 function buildWorkingSet(ns: NS, candidates: ServerReport[], totalFreeRamGb: number, scriptRamGb: ScriptRamGb): ServerReport[] {
 	const workingSet: ServerReport[] = [];
 	let poolRemaining = totalFreeRamGb;
 
 	for (const candidate of candidates) {
-		const plan = computeThreadPlan(ns, candidate.hostname);
-		const needed = planRamGb(plan, scriptRamGb);
+		const needed = estimateTargetDemandGb(ns, candidate.hostname, scriptRamGb);
 		if (needed <= 0) continue;
 
 		if (workingSet.length > 0) {
-			const minRam = minFundableThreadRamGb(plan, scriptRamGb);
-			if (poolRemaining < minRam) break;
+			const minUnit = minFundableUnitRamGb(ns, candidate.hostname, scriptRamGb);
+			if (poolRemaining < minUnit) break;
 		}
 
 		workingSet.push(candidate);
@@ -226,22 +321,28 @@ function buildWorkingSet(ns: NS, candidates: ServerReport[], totalFreeRamGb: num
 
 // Total RAM every currently-known candidate would soak up if RAM were unlimited - unlike
 // buildWorkingSet, this doesn't stop at the first candidate the pool can't fund, so it's the
-// real demand ceiling rather than what's admitted this cycle. This is the "would more RAM
-// even help right now" signal server-purchase-manager.ts uses to stop buying.
+// real demand ceiling rather than what's admitted this cycle. This is the "would more RAM even
+// help right now" signal server-purchase-manager.ts uses to stop buying.
 function computeTotalDemandGb(ns: NS, candidates: ServerReport[], scriptRamGb: ScriptRamGb): number {
 	let total = 0;
-	for (const candidate of candidates) {
-		total += planRamGb(computeThreadPlan(ns, candidate.hostname), scriptRamGb);
-	}
+	for (const candidate of candidates) total += estimateTargetDemandGb(ns, candidate.hostname, scriptRamGb);
 	return total;
 }
 
-function dispatch(ns: NS, script: string, desiredThreads: number, target: string, hosts: string[], freeRam: Map<string, number>): number {
-	if (desiredThreads < 1) return 0;
+interface HostAllocation {
+	host: string;
+	threads: number;
+}
+
+// Pure RAM-fit simulation shared by dispatch() (which commits whatever fits) and dispatchBatch()
+// (which needs to know a FULL allocation is possible before committing anything) - mutates the
+// freeRam map it's given so repeated calls against the same map compose, but never calls
+// ns.exec itself.
+function planHostAllocation(ns: NS, script: string, desiredThreads: number, hosts: string[], freeRam: Map<string, number>): HostAllocation[] {
+	if (desiredThreads < 1) return [];
 
 	let remaining = desiredThreads;
-	let launched = 0;
-
+	const allocations: HostAllocation[] = [];
 	for (const host of hosts) {
 		if (remaining < 1) break;
 
@@ -253,37 +354,86 @@ function dispatch(ns: NS, script: string, desiredThreads: number, target: string
 		const threads = Math.min(remaining, Math.floor(available / ramPerThread));
 		if (threads < 1) continue;
 
-		const pid = ns.exec(script, host, threads, target);
-		if (pid === 0) continue;
-
+		allocations.push({ host, threads });
 		freeRam.set(host, available - threads * ramPerThread);
 		remaining -= threads;
-		launched += threads;
 	}
+	return allocations;
+}
 
+function allocatedThreads(allocations: HostAllocation[]): number {
+	return allocations.reduce((sum, a) => sum + a.threads, 0);
+}
+
+function commitAllocation(ns: NS, script: string, target: string, delayMs: number, allocations: HostAllocation[]): number {
+	let launched = 0;
+	for (const { host, threads } of allocations) {
+		const pid = ns.exec(script, host, threads, target, delayMs);
+		if (pid !== 0) launched += threads;
+	}
 	return launched;
 }
 
-// Dispatches one target's weaken/grow/hack batch against the shared, progressively-drained
-// freeRam map for this tick, and returns the ms until this target should be dispatched again -
-// its own weaken/grow/hack duration, or NO_RAM_RETRY_MS if nothing launched at all.
+function dispatch(ns: NS, script: string, desiredThreads: number, target: string, hosts: string[], freeRam: Map<string, number>): number {
+	return commitAllocation(ns, script, target, 0, planHostAllocation(ns, script, desiredThreads, hosts, freeRam));
+}
+
+// Launches one HWGW batch, or none at all. A batch is only useful if every operation gets its
+// full thread count - a hack that lands without its paired weaken1 (or a grow without its
+// weaken2) leaves this target's security uncorrected for every other batch in flight against
+// it, not just this one - so this dry-runs the allocation against a scratch copy of freeRam
+// first and only commits (mutating the real freeRam and calling ns.exec) if all four fit.
+function dispatchBatch(ns: NS, hostname: string, hosts: string[], freeRam: Map<string, number>, plan: BatchPlan): boolean {
+	const ops = [
+		{ script: WEAKEN_SCRIPT, threads: plan.weaken1Threads },
+		{ script: HACK_SCRIPT, threads: plan.hackThreads },
+		{ script: GROW_SCRIPT, threads: plan.growThreads },
+		{ script: WEAKEN_SCRIPT, threads: plan.weaken2Threads },
+	];
+
+	const scratch = new Map(freeRam);
+	for (const op of ops) {
+		if (allocatedThreads(planHostAllocation(ns, op.script, op.threads, hosts, scratch)) < op.threads) return false;
+	}
+
+	commitAllocation(ns, WEAKEN_SCRIPT, hostname, plan.weaken1DelayMs, planHostAllocation(ns, WEAKEN_SCRIPT, plan.weaken1Threads, hosts, freeRam));
+	commitAllocation(ns, HACK_SCRIPT, hostname, plan.hackDelayMs, planHostAllocation(ns, HACK_SCRIPT, plan.hackThreads, hosts, freeRam));
+	commitAllocation(ns, GROW_SCRIPT, hostname, plan.growDelayMs, planHostAllocation(ns, GROW_SCRIPT, plan.growThreads, hosts, freeRam));
+	commitAllocation(ns, WEAKEN_SCRIPT, hostname, plan.weaken2DelayMs, planHostAllocation(ns, WEAKEN_SCRIPT, plan.weaken2Threads, hosts, freeRam));
+	return true;
+}
+
+// Dispatches one target's next unit of work against the shared, progressively-drained freeRam
+// map for this tick, and returns the ms until this target should be dispatched again.
+//
+// Not primed (see isPrimed): plain continuous weaken/grow, waited out in full before the next
+// attempt - batching's per-batch thread math assumes it's the only thing changing the target's
+// security/money between one batch's own landings, which isn't true while security or money are
+// still far from their floor/ceiling.
+//
+// Primed: HWGW batching - many batches kept concurrently in flight, spaced by
+// MIN_BATCH_PERIOD_MS regardless of any one batch's own full duration, so idle time between one
+// batch's landings gets filled by others.
 function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<string, number>): number {
-	const plan = computeThreadPlan(ns, hostname);
-	// Priority order when RAM is short: security first (weaken), then money (grow),
-	// then income (hack) - matches this repo's original threshold ordering.
-	const weakenLaunched = dispatch(ns, WEAKEN_SCRIPT, plan.weaken, hostname, hosts, freeRam);
-	const growLaunched = dispatch(ns, GROW_SCRIPT, plan.grow, hostname, hosts, freeRam);
-	const hackLaunched = dispatch(ns, HACK_SCRIPT, plan.hack, hostname, hosts, freeRam);
+	if (!isPrimed(ns, hostname)) {
+		const plan = computePrepPlan(ns, hostname);
+		const weakenLaunched = dispatch(ns, WEAKEN_SCRIPT, plan.weaken, hostname, hosts, freeRam);
+		const growLaunched = dispatch(ns, GROW_SCRIPT, plan.grow, hostname, hosts, freeRam);
 
-	if (weakenLaunched < 1 && growLaunched < 1 && hackLaunched < 1) return NO_RAM_RETRY_MS;
+		if (weakenLaunched < 1 && growLaunched < 1) return NO_RAM_RETRY_MS;
 
-	return (
-		Math.max(
-			weakenLaunched > 0 ? ns.getWeakenTime(hostname) : 0,
-			growLaunched > 0 ? ns.getGrowTime(hostname) : 0,
-			hackLaunched > 0 ? ns.getHackTime(hostname) : 0,
-		) + LOOP_BUFFER_MS
-	);
+		return (
+			Math.max(
+				weakenLaunched > 0 ? ns.getWeakenTime(hostname) : 0,
+				growLaunched > 0 ? ns.getGrowTime(hostname) : 0,
+			) + LOOP_BUFFER_MS
+		);
+	}
+
+	const plan = computeBatchPlan(ns, hostname);
+	if (!plan) return NO_RAM_RETRY_MS;
+
+	return dispatchBatch(ns, hostname, hosts, freeRam, plan) ? plan.periodMs : NO_RAM_RETRY_MS;
 }
 
 export async function main(ns: NS): Promise<void> {
