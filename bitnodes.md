@@ -6,7 +6,7 @@ _Compiled 2026-07-24 via `/research`, cross-checked against the live game source
 
 Money is a *means*, not the win condition — this is why $34T in BN1 alone doesn't destroy the node. The actual trigger is identical across all BitNodes:
 
-1. Get invited to the **Daedalus** faction (requires ~$100b net worth and either hacking skill ≥2500 or combined combat stats ≥1500 — this is what large money totals are actually gating).
+1. Get invited to the **Daedalus** faction (requires $100b net worth, 30 augmentations owned, **and** either hacking skill ≥2500 **or** all combat stats ≥1500 — this is what large money totals are actually gating).
 2. Earn enough Daedalus reputation to buy the **"The Red Pill"** augmentation (no money cost, reputation-gated), then install it.
 3. Manually hack the server **`w0r1d_d43m0n`** (WorldDaemon). Base requirement: hacking level **3000** (scales with that BitNode's hacking-level multiplier — some BitNodes require far more, players report 15,000+ in harder nodes).
 4. A successful hack triggers `Router.toPage(BitVerse)` — the BitNode is destroyed, most progress resets, and you're awarded (or level up) that BitNode's **Source-File**, a permanent cross-BitNode buff.
