@@ -216,7 +216,7 @@ export async function main(ns: NS): Promise<void> {
 	ns.ui.openTail();
 	const [windowWidth, windowHeight] = ns.ui.windowSize();
 	ns.ui.resizeTail(TAIL_WIDTH, windowHeight - TAIL_HEIGHT_MARGIN);
-	ns.ui.moveTail(windowWidth - OVERVIEW_WIDTH - TAIL_WIDTH, TAIL_Y);
+	ns.ui.moveTail(windowWidth - OVERVIEW_WIDTH - TAIL_WIDTH - 5, TAIL_Y + 5);
 	ns.print("battlestation: starting");
 
 	let lastFrame = "";
