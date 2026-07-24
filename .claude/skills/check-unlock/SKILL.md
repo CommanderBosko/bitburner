@@ -21,7 +21,7 @@ Some program unlocks (BruteSSH.exe, FTPCrack.exe, relaySMTP.exe, HTTPWorm.exe, S
 3. Interpret the three sections of output:
    - **ProgramName enum entry** — confirms the program exists in `NetscriptDefinitions.d.ts`'s `ProgramName` type. If not found, flag the spelling to the user before continuing.
    - **Other mentions in NetscriptDefinitions.d.ts** — if this is empty, the program is terminal/UI-only with no `ns.*` hook; no code changes needed. If it lists a related `ns.*` method or interface, that's the scriptable hook this program unlocks.
-   - **References elsewhere in src/** — if a hook exists, check whether it's already wired in (e.g. `src/lib/network.ts`'s port-opener list for the SSH/FTP/SMTP/HTTP/SQL-style programs). Empty output means the hook exists in the API but isn't used in this codebase yet — flag this as a possible follow-up, not an error.
+   - **References elsewhere in src/** — if a hook exists, check whether it's already wired in (e.g. `src/lib/root.ts`'s port-opener list for the SSH/FTP/SMTP/HTTP/SQL-style programs). Empty output means the hook exists in the API but isn't used in this codebase yet — flag this as a possible follow-up, not an error.
 4. Report to the user: whether this unlock needs a code change, and if so, what and where.
 5. Append a new bullet to the **"## Programs unlocked"** list in `/home/bosko/.claude/projects/-home-bosko-projects-bitburner/memory/bitburner_progression.md`, matching the existing entries' format: `- **<Program.exe>** (unlocked <today's date>). <one-line description of what it does>. <ns.* hook finding>. <code-change verdict>.`
 
