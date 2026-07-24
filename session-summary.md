@@ -1,4 +1,29 @@
-## Session: 2026-07-23 — Darknet crash fix, scaffold-loop.sh bug actually fixed, server-tree un-chained
+## Session: 2026-07-23 — HWGW batching in controller.ts, hacknet Formulas.exe dependency dropped
+
+**Focus**: User asked why purchased-server RAM sat unused in Active Scripts; traced it to the tier-2 dispatch model's demand ceiling, then implemented true HWGW batching to remove it — then fixed a live crash the user hit mid-verification.
+
+### What changed (and why)
+- User noticed most purchased servers showed no running scripts in the in-game Active Scripts tab despite `scan` showing them all rooted. Explained the tab only lists hosts with something currently running, then traced the real cause: `battlestation.ts` showed only ~8.7TB of ~1.6PB purchased RAM in use (~0.5%). Root-caused to the tier-2 proportional-simultaneous-WGH dispatch model (`controller.ts`) — a target's demand is capped by its own live security/money state, not by available RAM, so once every candidate target's one-round demand was funded, the rest of the purchased fleet had nothing to do.
+- User asked to look at what true HWGW batching would take, then to implement it. Two design decisions settled via `AskUserQuestion` before coding: skip `Formulas.exe` (recompute each batch's `additionalMsec` delays from live `getHackTime`/`getGrowTime`/`getWeakenTime` right before launch, both to dodge the augment-reset wipe risk and the desync-under-precompute fragility the original tier-2 research flagged) and wire batching into the existing multi-target working set in the same pass rather than single-target-first.
+- Implemented in `controller.ts`: `computeBatchPlan`/`dispatchBatch` for primed targets (self-contained hack→weaken→grow→weaken batches, standard "anchor on the weakens" timing layout, queued every `MIN_BATCH_PERIOD_MS`), `dispatchBatch`'s all-or-nothing funding check (a partial batch would leave the target's security uncorrected for every other in-flight batch), and a timing-derived (not RAM-derived) demand ceiling so `server-purchase-manager.ts`'s stop-buying logic stays meaningful. `hack.ts`/`grow.ts`/`weaken.ts` gained a delay arg passed as `additionalMsec`.
+- `ram-audit` caught that the new code used `??` in four spots — a phantom-RAM-charge trigger already documented in this repo's own memory/`SKILL.md` from a prior session. Fixed all four to explicit ternaries before considering the build done; a reminder that a rule already in memory still needs to actually be applied, not just known.
+- Mid-verification, the user hit a live runtime crash: an augment install (not part of this session) wiped `Formulas.exe`, breaking `hacknet-manager.ts`'s `ns.formulas.hacknetNodes.moneyGainRate()` call (added just one session prior, `14e0c23`). Reverted to the exact hand-rolled approximation that call had replaced, made permanent this time — the fix isn't "re-buy Formulas.exe," since every home `.exe` is wiped on every augment install, not just this once.
+
+### Decisions
+- No RAM-spanning reservation ledger was needed for batching — `ns.getServerUsedRam()` already reflects real running processes for their whole in-game duration, so the existing per-tick `computeFreeRam()` snapshot is sufficient; the only real change needed was tick frequency (as tight as `MIN_BATCH_PERIOD_MS` per active target, vs. one per full WGH round before).
+- Any hard dependency on a home `.exe` program (this session: `Formulas.exe`) is a standing bug in this repo, not a one-off fix — augment installs wipe all of them, confirmed twice now.
+
+### Issues / surprises
+- Batching's actual in-game behavior is unverified — build and `ram-audit` are clean, but the user couldn't test yet (blocked by the Formulas.exe crash, now fixed). Also flagged but untested: `computeFreeRam`'s full ~94-host rescan every tick may or may not keep up at the new, much tighter `MIN_BATCH_PERIOD_MS` (80ms) cadence.
+
+### Next session
+- Verify HWGW batching in-game: batches actually landing in order on primed targets, money/security staying stable, purchased-server RAM utilization rising well past ~0.5%, and the tight dispatch-loop cadence not falling behind schedule at ~94 hosts.
+- Re-verify `controller.js`/`hacknet-manager.js`'s real RAM cost via in-game `mem` against the static estimates (11.50GB / 8.70GB) now that both changed again this session.
+
+**Commits**: `3e260c3` (1 commit)
+
+---
+
 
 **Focus**: Ran skill-upgrade/skill-suggestion over the backlog since the last close, then fixed a live in-game darknet crash the user hit, then took `server-tree.ts` back out of the chain-launch.
 
