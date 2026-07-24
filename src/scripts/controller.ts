@@ -12,11 +12,16 @@ const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 const SECURITY_TOLERANCE = 5;
 const MONEY_THRESHOLD = 0.75;
-// Fraction of a target's current max money that a single hack cycle steals. Chosen as a
-// reasonable default per community consensus (see project-state.md's dispatch-model
-// decision), not tuned/benchmarked against this save specifically - a good first knob to
-// turn if money/sec needs adjusting later.
-const HACK_MONEY_FRACTION = 0.5;
+// Fraction of a target's current max money that a single hack cycle steals. Lowered from an
+// initial 0.5 (2026-07-23): stealing half forced a 2x growMultiplier every cycle, a long regrow
+// phase that left hack threads rarely computed at all relative to weaken/grow (see
+// computeThreadPlan - hackThreads only gets set once security is in tolerance AND money is
+// back above MONEY_THRESHOLD, and a 2x regrow spends a lot of time not meeting that bar). At
+// 0.1, each hack leaves money at ~90% of max, so growMultiplier is only ~1.11x - a quick top-up
+// instead of a long regrow - keeping the target hack-eligible far more of the time. Matches
+// the community-standard "small percentage, high frequency" approach over "big percentage,
+// rare" (see project-state.md's dispatch-model decision).
+const HACK_MONEY_FRACTION = 0.1;
 const LOOP_BUFFER_MS = 200;
 const NO_RAM_RETRY_MS = 5000;
 const RETARGET_INTERVAL_MS = 30000;
