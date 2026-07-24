@@ -46,7 +46,9 @@ function findBlockRange(stripped, startIndex) {
 }
 
 function findInterfaceBody(stripped, interfaceName) {
-  const re = new RegExp(`(?:^|\\n)\\s*export\\s+interface\\s+${interfaceName}\\b[^{]*\\{`);
+  // Some sub-interfaces (e.g. UserInterface) are declared without `export` -
+  // the leading keyword is optional in the .d.ts even though most are exported.
+  const re = new RegExp(`(?:^|\\n)\\s*(?:export\\s+)?interface\\s+${interfaceName}\\b[^{]*\\{`);
   const m = re.exec(stripped);
   if (!m) return null;
   const openBrace = m.index + m[0].length - 1;
@@ -87,8 +89,16 @@ function extractRamCost(originalLines, signatureLine) {
     break;
   }
   const block = commentLines.join("\n");
-  const m = /RAM cost:\s*([\d.]+)\s*GB/i.exec(block);
-  return { found: block.length > 0, cost: m ? Number.parseFloat(m[1]) : null };
+  // Some interfaces (e.g. Singularity) document a tiered cost like
+  // "RAM cost: 2 GB * 16/4/1" - the base number alone is NOT the real cost;
+  // it must be scaled by the first ratio value (the cost at SF4 tier 1, which
+  // is what applies before that Source-File is leveled up). Confirmed in-game
+  // for singularity.connect (2 * 16 = 32GB, matching `mem connect-to.js`).
+  const m = /RAM cost:\s*([\d.]+)\s*(?:GB)?\s*(?:\*\s*(\d+)\s*\/\s*\d+\s*\/\s*\d+)?/i.exec(block);
+  if (!m) return { found: block.length > 0, cost: null, scaled: false };
+  const base = Number.parseFloat(m[1]);
+  const multiplier = m[2] ? Number.parseFloat(m[2]) : 1;
+  return { found: true, cost: base * multiplier, scaled: Boolean(m[2]) };
 }
 
 function lookup(name, stripped, originalLines, nsBody) {
@@ -96,8 +106,8 @@ function lookup(name, stripped, originalLines, nsBody) {
   if (parts.length === 1) {
     const line = findMemberLine(stripped, nsBody.start, nsBody.end, parts[0]);
     if (line === null) return { name, status: "not-found" };
-    const { found, cost } = extractRamCost(originalLines, line);
-    return { name, status: found ? "found" : "no-ram-cost-line", cost, line: line + 1 };
+    const { found, cost, scaled } = extractRamCost(originalLines, line);
+    return { name, status: found ? "found" : "no-ram-cost-line", cost, scaled, line: line + 1 };
   }
 
   if (parts.length !== 2) {
@@ -111,12 +121,12 @@ function lookup(name, stripped, originalLines, nsBody) {
   }
   const subBody = findInterfaceBody(stripped, subInterfaceName);
   if (!subBody) {
-    return { name, status: "error", message: `couldn't find "export interface ${subInterfaceName} { ... }"` };
+    return { name, status: "error", message: `couldn't find "interface ${subInterfaceName} { ... }"` };
   }
   const line = findMemberLine(stripped, subBody.start, subBody.end, leaf);
   if (line === null) return { name, status: "not-found" };
-  const { found, cost } = extractRamCost(originalLines, line);
-  return { name, status: found ? "found" : "no-ram-cost-line", cost, line: line + 1 };
+  const { found, cost, scaled } = extractRamCost(originalLines, line);
+  return { name, status: found ? "found" : "no-ram-cost-line", cost, scaled, line: line + 1 };
 }
 
 function main() {
@@ -143,9 +153,11 @@ function main() {
   for (const name of names) {
     const result = lookup(name, stripped, originalLines, nsBody);
     switch (result.status) {
-      case "found":
-        console.log(`${result.name}: ${result.cost.toFixed(2)} GB  (NetscriptDefinitions.d.ts:${result.line})`);
+      case "found": {
+        const scaledNote = result.scaled ? "  [tiered cost - scaled by the SF4-tier-1 multiplier, e.g. \"2 GB * 16/4/1\" -> 32 GB]" : "";
+        console.log(`${result.name}: ${result.cost.toFixed(2)} GB  (NetscriptDefinitions.d.ts:${result.line})${scaledNote}`);
         break;
+      }
       case "no-ram-cost-line":
         console.log(`${result.name}: signature found (NetscriptDefinitions.d.ts:${result.line}) but no "RAM cost:" line in its doc comment - likely free (0 GB), verify before trusting`);
         break;
