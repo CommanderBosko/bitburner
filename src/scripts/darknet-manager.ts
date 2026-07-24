@@ -353,6 +353,9 @@ export async function main(ns: NS): Promise<void> {
 	const kb = loadKnowledgeBase(ns);
 	let cycle = 0;
 	let bootstrapped = Object.keys(kb.servers).length > 0;
+	// Augment installs wipe every home .exe (see progression memory), so DarkscapeNavigator.exe
+	// can disappear mid-run even though it was purchased earlier - warn once rather than crash.
+	let warnedMissingNavigator = false;
 
 	// CHAIN-TAIL: this is currently the last script in the boot chain (scan-root.ts ->
 	// controller.ts -> hacknet-manager.ts -> ... -> this one). If new-background-loop
@@ -406,10 +409,16 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
-		const instability = ns.dnet.getDarknetInstability();
+		const hasNavigator = ns.fileExists("DarkscapeNavigator.exe", "home");
+		if (!hasNavigator && !warnedMissingNavigator) {
+			ns.print("darknet-manager: DarkscapeNavigator.exe missing (likely wiped by an augment install) - instability throttle disabled until it's repurchased");
+			warnedMissingNavigator = true;
+		}
+		const instability = hasNavigator ? ns.dnet.getDarknetInstability() : undefined;
 		if (
-			instability.authenticationTimeoutChance > INSTABILITY_TIMEOUT_THRESHOLD ||
-			instability.authenticationDurationMultiplier > INSTABILITY_DURATION_THRESHOLD
+			instability &&
+			(instability.authenticationTimeoutChance > INSTABILITY_TIMEOUT_THRESHOLD ||
+				instability.authenticationDurationMultiplier > INSTABILITY_DURATION_THRESHOLD)
 		) {
 			ns.print(
 				`darknet-manager: instability throttle engaged (timeoutChance=${instability.authenticationTimeoutChance.toFixed(2)}, ` +
