@@ -7,6 +7,15 @@ export interface ServerReport {
 	score: number;
 }
 
+// Written by controller.ts each retarget cycle, read by server-purchase-manager.ts to avoid
+// buying/upgrading servers past the point where the extra RAM has anywhere to go - see
+// buildWorkingSet's demand math in controller.ts for how totalDemandGb is derived.
+export interface RamDemandReport {
+	totalDemandGb: number;
+	totalCapacityGb: number;
+	writtenAt: number;
+}
+
 export type DarknetServerStatus = "probed" | "cracking" | "cracked" | "unresolvable";
 
 export interface CrackCandidate {

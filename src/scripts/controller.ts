@@ -1,5 +1,5 @@
 import type { NS } from "../NetscriptDefinitions";
-import type { ServerReport } from "../lib/types";
+import type { RamDemandReport, ServerReport } from "../lib/types";
 import { runWithRetry } from "../lib/launch";
 
 const WEAKEN_SCRIPT = "scripts/weaken.js";
@@ -10,6 +10,10 @@ const HACKNET_MANAGER_SCRIPT = "scripts/hacknet-manager.js";
 const BATTLESTATION_SCRIPT = "scripts/battlestation.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
+// Consumed by server-purchase-manager.ts to stop buying/upgrading once purchased-server
+// capacity already covers every known target's weaken+grow+hack demand - see the
+// computeTotalDemandGb comment below for what "demand" means here.
+const RAM_DEMAND_FILE = "/data/ram-demand.json";
 const SECURITY_TOLERANCE = 5;
 const MONEY_THRESHOLD = 0.75;
 // Fraction of a target's current max money that a single hack cycle steals. Lowered from an
@@ -113,6 +117,18 @@ function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<str
 	return freeRam;
 }
 
+// Total RAM the host pool actually has (net of home's fixed reserve), as opposed to
+// computeFreeRam's currently-unused RAM - this is the ceiling server-purchase-manager.ts
+// compares against, not a instant-by-instant snapshot.
+function computeCapacityGb(ns: NS, hosts: string[], homeReserveGb: number): number {
+	let total = 0;
+	for (const host of hosts) {
+		const reserve = host === "home" ? homeReserveGb : 0;
+		total += Math.max(0, ns.getServerMaxRam(host) - reserve);
+	}
+	return total;
+}
+
 interface ThreadPlan {
 	weaken: number;
 	grow: number;
@@ -206,6 +222,18 @@ function buildWorkingSet(ns: NS, candidates: ServerReport[], totalFreeRamGb: num
 	}
 
 	return workingSet;
+}
+
+// Total RAM every currently-known candidate would soak up if RAM were unlimited - unlike
+// buildWorkingSet, this doesn't stop at the first candidate the pool can't fund, so it's the
+// real demand ceiling rather than what's admitted this cycle. This is the "would more RAM
+// even help right now" signal server-purchase-manager.ts uses to stop buying.
+function computeTotalDemandGb(ns: NS, candidates: ServerReport[], scriptRamGb: ScriptRamGb): number {
+	let total = 0;
+	for (const candidate of candidates) {
+		total += planRamGb(computeThreadPlan(ns, candidate.hostname), scriptRamGb);
+	}
+	return total;
 }
 
 function dispatch(ns: NS, script: string, desiredThreads: number, target: string, hosts: string[], freeRam: Map<string, number>): number {
@@ -333,6 +361,18 @@ export async function main(ns: NS): Promise<void> {
 
 				workingSet = buildWorkingSet(ns, candidates, totalFreeRamGb, scriptRamGb);
 				const desiredHostnames = new Set(workingSet.map((t) => t.hostname));
+
+				// Only written while there's at least one real candidate - if scan-root hasn't
+				// found/rooted anything yet, leaving this file unwritten (rather than writing a
+				// misleading totalDemandGb of 0) lets server-purchase-manager.ts's staleness check
+				// fall back to unlimited buying during that bootstrap window, instead of reading
+				// "zero demand" and pausing purchases before there's anything to hack yet.
+				const demandReport: RamDemandReport = {
+					totalDemandGb: computeTotalDemandGb(ns, candidates, scriptRamGb),
+					totalCapacityGb: computeCapacityGb(ns, hosts, reserveGb),
+					writtenAt: now,
+				};
+				ns.write(RAM_DEMAND_FILE, JSON.stringify(demandReport, null, 2), "w");
 
 				for (const hostname of desiredHostnames) {
 					if (!nextDispatchAt.has(hostname)) {
