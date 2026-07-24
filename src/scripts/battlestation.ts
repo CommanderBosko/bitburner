@@ -10,10 +10,14 @@ type MoneySourceKey = keyof MoneySource;
 const BATTLESTATION_INTERVAL_MS = 60000;
 const WORKER_SCRIPTS = ["scripts/hack.js", "scripts/grow.js", "scripts/weaken.js"];
 const LABEL_WIDTH = 14;
-const TAIL_WIDTH = 420;
-const TAIL_HEIGHT = 320;
-const TAIL_X = 0;
+const TAIL_WIDTH = 600;
 const TAIL_Y = 0;
+// Reserves room for the browser's own chrome (title bar, taskbar) below the game window,
+// since ns.ui.windowSize() reports the full window height, not the usable game area.
+const TAIL_HEIGHT_MARGIN = 100;
+// No ns.ui API reports the Overview panel's width, so this is a fixed estimate (measured
+// off a 1920px-wide window) used to anchor the tail window just to its left.
+const OVERVIEW_WIDTH = 220;
 
 // Display order + labels for every MoneySource field except "total" and the two
 // expense counters, which get netted into their paired income field below instead
@@ -210,8 +214,9 @@ function renderFrame(ns: NS, incomePerMinute: number, sourceLines: string[]): st
 export async function main(ns: NS): Promise<void> {
 	ns.disableLog("ALL");
 	ns.ui.openTail();
-	ns.ui.resizeTail(TAIL_WIDTH, TAIL_HEIGHT);
-	ns.ui.moveTail(TAIL_X, TAIL_Y);
+	const [windowWidth, windowHeight] = ns.ui.windowSize();
+	ns.ui.resizeTail(TAIL_WIDTH, windowHeight - TAIL_HEIGHT_MARGIN);
+	ns.ui.moveTail(windowWidth - OVERVIEW_WIDTH - TAIL_WIDTH, TAIL_Y);
 	ns.print("battlestation: starting");
 
 	let lastFrame = "";
