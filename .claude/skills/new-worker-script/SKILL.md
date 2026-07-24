@@ -24,10 +24,12 @@ Scaffold a new single-purpose Bitburner worker script under `src/scripts/` that 
 
    export async function main(ns: NS): Promise<void> {
    	const target = ns.args[0] as string;
-   	await ns.hack(target);
+   	const rawDelay = ns.args[1] as number;
+   	const delayMs = rawDelay === undefined ? 0 : rawDelay;
+   	await ns.hack(target, { additionalMsec: delayMs });
    }
    ```
-   If any of them has drifted from this shape, stop and tell the user — the script's template needs updating before proceeding, don't silently paper over it by hand-writing the new file differently.
+   The second arg/`additionalMsec` delay exists so `controller.ts`'s HWGW batch dispatcher can stagger landing times between concurrently-launched workers. If any of them has drifted from this shape, stop and tell the user — the script's template needs updating before proceeding, don't silently paper over it by hand-writing the new file differently.
 
 3. Run:
    ```bash
@@ -49,4 +51,4 @@ Scaffold a new single-purpose Bitburner worker script under `src/scripts/` that 
 
 ## Scripts
 
-- `scripts/new-worker-script.sh <name> <method> [--no-target]` — Step 3's file generation. Validates `<name>` is kebab-case, refuses to overwrite an existing `src/scripts/<name>.ts`, and writes the with-target or no-target template (tab-indented, matching `hack.ts`/`grow.ts`/`weaken.ts`) depending on `--no-target`. Exits non-zero with a diagnostic message on validation failure or an existing file.
+- `scripts/new-worker-script.sh <name> <method> [--no-target]` — Step 3's file generation. Validates `<name>` is kebab-case, refuses to overwrite an existing `src/scripts/<name>.ts`, and writes the with-target (target + `additionalMsec` delay, tab-indented, matching `hack.ts`/`grow.ts`/`weaken.ts`) or no-target template depending on `--no-target`. Exits non-zero with a diagnostic message on validation failure or an existing file.
