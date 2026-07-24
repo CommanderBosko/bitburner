@@ -2,8 +2,10 @@ import type { NS } from "../NetscriptDefinitions";
 
 const REFRESH_INTERVAL_MS = 2000;
 const TAIL_WIDTH = 1000;
-const TAIL_HEIGHT = 800;
 const TAIL_MARGIN = 10;
+// Reserves room for the browser's own chrome (title bar, taskbar) below the game window,
+// since ns.ui.windowSize() reports the full window height, not the usable game area.
+const TAIL_HEIGHT_MARGIN = 100;
 
 function statusTag(ns: NS, host: string): string {
 	const rooted = ns.hasRootAccess(host);
@@ -33,7 +35,8 @@ function renderTree(ns: NS): string {
 export async function main(ns: NS): Promise<void> {
 	ns.disableLog("ALL");
 	ns.ui.openTail();
-	ns.ui.resizeTail(TAIL_WIDTH, TAIL_HEIGHT);
+	const [, windowHeight] = ns.ui.windowSize();
+	ns.ui.resizeTail(TAIL_WIDTH, windowHeight - TAIL_HEIGHT_MARGIN);
 	ns.ui.moveTail(TAIL_MARGIN, TAIL_MARGIN);
 
 	let lastFrame = "";
