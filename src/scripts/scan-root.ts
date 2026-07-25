@@ -8,6 +8,9 @@ const CONTROLLER_SCRIPT = "scripts/controller.js";
 const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
 
+const WORLD_DAEMON = "w0r1d_d43m0n";
+const WORLD_DAEMON_ALERT_FLAG = "/data/world-daemon-alerted.txt";
+
 export async function main(ns: NS): Promise<void> {
 	const hackingLevel = ns.getHackingLevel();
 	const hosts = scanNetwork(ns);
@@ -30,6 +33,11 @@ export async function main(ns: NS): Promise<void> {
 	reports.sort((a, b) => b.score - a.score);
 
 	ns.write("/data/servers.json", JSON.stringify(reports, null, 2), "w");
+
+	if (hosts.includes(WORLD_DAEMON) && !ns.fileExists(WORLD_DAEMON_ALERT_FLAG, "home")) {
+		ns.alert(`scan-root: ${WORLD_DAEMON} discovered on the network!`);
+		ns.write(WORLD_DAEMON_ALERT_FLAG, "1", "w");
+	}
 
 	const rootedCount = reports.filter((r) => r.rooted).length;
 	const hackableCount = reports.filter((r) => r.score > 0).length;
