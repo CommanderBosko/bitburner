@@ -1,3 +1,35 @@
+## Session: 2026-07-24 — Darknet crash fix, tail-window polish, BitNode win-conditions doc, skill-audit fixes
+
+_Older entries are in [session-summary-archive.md](session-summary-archive.md)._
+
+**Focus**: Seven small unclosed sessions across the day — a live darknet crash fix, tail-window sizing/positioning work on `battlestation.ts`/`server-tree.ts` (plus a new `position-tail-window` skill), a BitNode win-conditions reference doc, and a `skill-audit` pass that fixed three real skill bugs.
+
+### What changed (and why)
+- User hit a live runtime error after an augment install: `dnet.getDarknetInstability` failing because `DarkscapeNavigator.exe` had been wiped (same standing augment-reset pattern as every other home `.exe`). Since it can't be auto-repurchased (Singularity-gated, no SF4), guarded the call with `fileExists`, added a one-time warning, and disabled the instability throttle until the program is manually repurchased.
+- User asked for `server-tree.ts` to move to the top-right, then top-left, and to double then fix its width to 1000 — iterated live via pixel-delta feedback, landed on `(10, 10)` at 1000px wide.
+- User asked whether BN1's win condition was just money (they're at $34T). Ran `/research` (6 parallel agents against the game's source, official docs, and community guides) since the official docs' "BitNode Details" section is an unwritten TODO. Wrote `bitnodes.md`: money is a gate, not the win condition — every BitNode (including BN1) is completed via Daedalus invite → The Red Pill augmentation → manually hacking `w0r1d_d43m0n` at hacking ≥3000. Corrected a first-pass gap (missing 30-augmentations requirement for Daedalus) once the user flagged it.
+- User asked `battlestation.ts` to use the full screen vertically. Skipped the full `/interview` ceremony per its own guidance (small, well-scoped, obvious implementation path) and used `ns.ui.windowSize()` (0GB RAM) to size height dynamically; then iterated width (500 → 600) and X-position (anchored left of the Overview panel via a measured `OVERVIEW_WIDTH = 220` estimate, since no API exposes that panel's width) via user feedback; then a final 5px nudge down-and-left.
+- Ran `/skill-audit`, then "fix it all": found and fixed three real bugs — `ns-cost-lookup` dropped the RAM-scaling suffix on tiered-cost (Singularity) methods and errored on unexported interfaces like `UserInterface`; `new-worker-script`'s scaffold template had drifted to the pre-HWGW-batching 1-arg worker shape; three skills (`check-unlock`, `ram-audit`, `new-background-loop`) had stale doc references from earlier refactors.
+- Asked "should we make a skill for [tail-window positioning]?" after noticing the pattern — built `position-tail-window` (knowledge/judgment skill, no scripts/assets), smoke-tested with a real then-reverted nudge to `server-tree.ts`, then used it for real to give `server-tree.ts` the same dynamic-height treatment as `battlestation.ts`.
+
+### Decisions
+- A documented gotcha with an unapplied fix behaves like an undocumented one — applied the `skill-audit` fixes in the same pass rather than just reporting them (same rule as the 2026-07-23 close).
+- `position-tail-window` scoped as judgment work (interpreting pixel-delta corrections), not template generation — no `scripts/`/`assets/` needed.
+- Tail-window height is now computed from `ns.ui.windowSize()` minus a fixed `TAIL_HEIGHT_MARGIN` (100px) browser-chrome allowance, rather than a hardcoded pixel constant — established on `battlestation.ts` this session, then reused for `server-tree.ts`.
+
+### Issues / surprises
+- None of this session's work touched the HWGW batching or purchased-server-automation verification still pending from the 2026-07-23 close — those remain open.
+- No project-local `secret-scan` skill existed yet for this repo's close-out public-safety pass — generated one via `/create-secret-scan` (no dedicated secret-management scheme; plain gitignored `.env`), ran it, and confirmed clean (no secrets in the tree or 58-commit history) before publishing README changes.
+
+### Next session
+- Verify `darknet-manager.ts`'s missing-`DarkscapeNavigator.exe` warning/recovery in-game.
+- Still pending from 2026-07-23: verify HWGW batching and purchased-server automation in-game (see `project-state.md`).
+- Toward BitNode 4 completion: Daedalus invite → Red Pill → hack `w0r1d_d43m0n` (manual, not scriptable pre-SF4).
+
+**Commits**: `a88282c`..`da1c6cd` (11 commits)
+
+---
+
 ## Session: 2026-07-23 — HWGW batching in controller.ts, hacknet Formulas.exe dependency dropped
 
 **Focus**: User asked why purchased-server RAM sat unused in Active Scripts; traced it to the tier-2 dispatch model's demand ceiling, then implemented true HWGW batching to remove it — then fixed a live crash the user hit mid-verification.
@@ -130,28 +162,3 @@
 
 ---
 
-## Session: 2026-07-19 — RAM-retry fix, dev-watch/check-unlock skills, full skill-audit
-
-**Focus**: Diagnose a misleading `activate.js` launch failure, then build out the project's dev-workflow tooling and audit it for quality.
-
-### What changed (and why)
-- `activate.ts` (and `rescan-loop.ts`) launches now retry on RAM-blocked `ns.run()` failures and report actual launched/failed scripts, instead of a hardcoded success message that lied when `rescan-loop.js` failed to start under RAM pressure (`controller.ts` + `hacknet-manager.ts` alone use ~11.35GB against a 16GB home server).
-- Added `dev-watch` skill so `npm run watch`/`sync` can run as detached (`nohup`+`disown`) background processes instead of two dedicated terminals.
-- Added `check-unlock` skill, automating a pattern that had recurred by hand across 5+ sessions: check whether a newly-unlocked `.exe` maps to an `ns.*` hook, and log the finding in progression memory.
-- Ran a full `skill-audit` sweep across all 6 project-local skills (3 parallel sub-agents) and implemented every finding: `## Arguments` sections added to 3 skills; `new-worker-script` gained a real script instead of hand-typing its template every run; `new-background-loop`'s template moved to `assets/loop-template.ts` as a single source of truth.
-
-### Decisions
-- Keep `dev-watch`'s processes detached from Claude Code's own task tracking (so they survive a session ending) even though that means they don't show in the "n watcher(s)" UI indicator — documented as a Gotcha, not treated as a bug to "fix."
-- Verify audit findings empirically before trusting them, not just relay sub-agent claims — caught two false positives (dev-watch `stop` orphaning children; `disown` no-op on a PID) by live-testing against the real running watchers.
-
-### Issues / surprises
-- Found a real bash bug while verifying the `new-background-loop` template fix: bash ≥5.2 defaults `patsub_replacement` on, so an unescaped `&` in a `${var//pat/repl}` replacement silently expands to the matched pattern text instead of substituting literally — would have corrupted any scaffolded loop whose purpose string contained `&`. Fixed with `shopt -u patsub_replacement`.
-- `secret-scan` skill isn't available in this project (no global or project-local copy); substituted a manual grep for secret patterns before touching `README.md` — came back clean.
-
-### Next session
-- Consider a home-RAM upgrade in-game — no further script can join `activate.ts`'s always-on launch list without one.
-- Next program unlock → run `check-unlock`. Next persistent automation idea → run `new-background-loop`.
-
-**Commits**: `0c1a156..e5b65e6` (8 commits)
-
----
