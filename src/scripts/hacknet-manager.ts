@@ -1,11 +1,7 @@
 import type { NS } from "../NetscriptDefinitions";
-import { runWithRetry } from "../lib/launch";
 
-const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
 const RESERVE_FRACTION = 0.1;
 const LOOP_INTERVAL_MS = 10000;
-const LAUNCH_RETRY_ATTEMPTS = 5;
-const LAUNCH_RETRY_DELAY_MS = 3000;
 
 // Approximates ns.formulas.hacknetNodes.moneyGainRate(level, ram, cores, mult). Deliberately
 // not calling the real Formulas API: Formulas.exe (and every other home .exe) gets wiped on
@@ -86,14 +82,6 @@ function applyPurchase(ns: NS, purchase: Purchase): boolean {
 
 export async function main(ns: NS): Promise<void> {
 	ns.print("hacknet-manager: starting");
-
-	// Chain-launch the last script in the bootstrap before settling into our own loop.
-	if (!ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
-		const rescanPid = await runWithRetry(ns, RESCAN_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-		if (rescanPid === 0) {
-			ns.tprint(`hacknet-manager: failed to start ${RESCAN_LOOP_SCRIPT} - check RAM/sync`);
-		}
-	}
 
 	while (true) {
 		const mult = ns.getPlayer().mults.hacknet_node_money;

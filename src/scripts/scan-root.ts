@@ -5,6 +5,7 @@ import type { ServerReport } from "../lib/types";
 import { runWithRetry } from "../lib/launch";
 
 const CONTROLLER_SCRIPT = "scripts/controller.js";
+const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
 const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
 
@@ -51,6 +52,17 @@ export async function main(ns: NS): Promise<void> {
 		const controllerPid = await runWithRetry(ns, CONTROLLER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
 		if (controllerPid === 0) {
 			ns.tprint(`scan-root: failed to start ${CONTROLLER_SCRIPT} - check RAM/sync`);
+		}
+	}
+
+	// Launched here directly (not via hacknet-manager.js, which is now low-priority and may
+	// never get RAM) since scan-loop/rescan-loop is one of the three scripts that must always
+	// run: without it re-scanning, controller.js's weaken/grow/hack dispatch never learns about
+	// newly rooted targets as hacking level climbs.
+	if (!ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
+		const rescanPid = await runWithRetry(ns, RESCAN_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (rescanPid === 0) {
+			ns.tprint(`scan-root: failed to start ${RESCAN_LOOP_SCRIPT} - check RAM/sync`);
 		}
 	}
 }

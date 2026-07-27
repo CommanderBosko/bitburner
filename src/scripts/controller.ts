@@ -1,6 +1,6 @@
 import type { NS } from "../NetscriptDefinitions";
 import type { RamDemandReport, ServerReport } from "../lib/types";
-import { runWithRetry } from "../lib/launch";
+import { hasEnoughHomeRam, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB } from "../lib/launch";
 
 const WEAKEN_SCRIPT = "scripts/weaken.js";
 const GROW_SCRIPT = "scripts/grow.js";
@@ -32,8 +32,6 @@ const RETARGET_INTERVAL_MS = 30000;
 // Floor for the scheduler's sleep so a due time in the very near future (or already passed)
 // can't produce a near-zero sleep and spin the loop.
 const MIN_LOOP_SLEEP_MS = 50;
-const LAUNCH_RETRY_ATTEMPTS = 5;
-const LAUNCH_RETRY_DELAY_MS = 3000;
 // Minimum spacing between the four landing times within one HWGW batch (see computeBatchPlan) -
 // small enough not to waste idle time, large enough to survive ordinary scheduler jitter so
 // operations from the same batch can't land out of order.
@@ -438,42 +436,11 @@ function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<
 }
 
 export async function main(ns: NS): Promise<void> {
-	// Chain-launch the next script in the bootstrap before doing our own (possibly
-	// early-returning) work, so hacknet purchasing starts even without a hack target yet.
-	if (!ns.isRunning(HACKNET_MANAGER_SCRIPT, "home")) {
-		const hacknetPid = await runWithRetry(ns, HACKNET_MANAGER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-		if (hacknetPid === 0) {
-			ns.tprint(`controller: failed to start ${HACKNET_MANAGER_SCRIPT} - check RAM/sync`);
-		}
-	}
-
-	// Chain-launch home-ram-loop.js ahead of battlestation.js: it's the fix for the RAM
-	// ceiling itself, so it gets first crack at any free RAM on a tight home budget.
-	if (!ns.isRunning(HOME_RAM_LOOP_SCRIPT, "home")) {
-		const homeRamPid = await runWithRetry(ns, HOME_RAM_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-		if (homeRamPid === 0) {
-			ns.tprint(`controller: failed to start ${HOME_RAM_LOOP_SCRIPT} - check RAM/sync`);
-		}
-	}
-
-	// Reserve battlestation's RAM footprint before sizing any weaken/grow/hack batch,
-	// so those batches are computed against the RAM actually left over.
-	if (!ns.isRunning(BATTLESTATION_SCRIPT, "home")) {
-		const battlestationPid = await runWithRetry(ns, BATTLESTATION_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-		if (battlestationPid === 0) {
-			ns.tprint(`controller: failed to start ${BATTLESTATION_SCRIPT} - check RAM/sync`);
-		}
-	}
-
-	// Launched here (not chain-tailed) so purchased servers start accumulating from this
-	// script's very first dispatch cycle, instead of only after the rest of the boot chain
-	// (which ends several scripts later at darknet-manager.ts) has already launched.
-	if (!ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home")) {
-		const purchaseManagerPid = await runWithRetry(ns, SERVER_PURCHASE_MANAGER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-		if (purchaseManagerPid === 0) {
-			ns.tprint(`controller: failed to start ${SERVER_PURCHASE_MANAGER_SCRIPT} - check RAM/sync`);
-		}
-	}
+	// scan-loop (scan-root.js/rescan-loop.js), controller.js (this script), and the
+	// weaken/grow/hack dispatch below are the three must-run priorities. Every other manager
+	// (home-ram-loop.js, hacknet-manager.js, battlestation.js, server-purchase-manager.js) is
+	// launched only from inside the dispatch loop, after each tick's dispatch has already
+	// claimed its RAM - see the loop below - so none of them can starve actual hacking.
 
 	// server-tree.js is deliberately NOT chain-launched (run it by hand when wanted), but its
 	// RAM still needs holding open so launching it later never has to wait on a batch to free up
@@ -572,6 +539,29 @@ export async function main(ns: NS): Promise<void> {
 			const next = now + waitMs;
 			nextDispatchAt.set(target.hostname, next);
 			earliestNext = Math.min(earliestNext, next);
+		}
+
+		// home-ram-loop.js is always allowed - it's the actual fix for the RAM ceiling - and only
+		// attempted after this tick's dispatch above has already claimed its RAM.
+		if (!ns.isRunning(HOME_RAM_LOOP_SCRIPT, "home")) {
+			const pid = ns.run(HOME_RAM_LOOP_SCRIPT);
+			if (pid === 0) {
+				ns.print(`controller: still waiting for RAM to start ${HOME_RAM_LOOP_SCRIPT}`);
+			}
+		}
+
+		// Everything else waits for home RAM to clear the threshold before even attempting to
+		// launch, so it can never compete with scan-loop/controller/weaken-grow-hack for RAM
+		// while home is this tight. Plain ns.run() (not runWithRetry, which sleeps between
+		// attempts and would stall dispatch) retried naturally every loop iteration.
+		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
+			for (const lowerPriorityScript of [HACKNET_MANAGER_SCRIPT, BATTLESTATION_SCRIPT, SERVER_PURCHASE_MANAGER_SCRIPT]) {
+				if (ns.isRunning(lowerPriorityScript, "home")) continue;
+				const pid = ns.run(lowerPriorityScript);
+				if (pid === 0) {
+					ns.print(`controller: still waiting for RAM to start ${lowerPriorityScript}`);
+				}
+			}
 		}
 
 		const sleepMs = Math.min(Math.max(earliestNext - Date.now(), MIN_LOOP_SLEEP_MS), RETARGET_INTERVAL_MS);

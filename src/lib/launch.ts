@@ -1,5 +1,15 @@
 import type { NS } from "../NetscriptDefinitions";
 
+// Below this, only scan-root.js/rescan-loop.js/controller.js/home-ram-loop.js and the
+// weaken/grow/hack dispatch itself are allowed to run - every other manager waits so it can't
+// compete with actual hacking for a tight home RAM budget. Once home RAM reaches this, the rest
+// may start.
+export const LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB = 64;
+
+export function hasEnoughHomeRam(ns: NS, thresholdGb: number): boolean {
+	return ns.getServerMaxRam("home") >= thresholdGb;
+}
+
 export async function runWithRetry(
 	ns: NS,
 	script: string,

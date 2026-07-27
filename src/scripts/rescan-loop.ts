@@ -1,5 +1,5 @@
 import type { NS } from "../NetscriptDefinitions";
-import { runWithRetry } from "../lib/launch";
+import { hasEnoughHomeRam, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB, runWithRetry } from "../lib/launch";
 
 const SCAN_ROOT_SCRIPT = "scripts/scan-root.js";
 const RESCAN_INTERVAL_MS = 30000;
@@ -11,25 +11,20 @@ const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";
 const COMPANY_WORK_LOOP_SCRIPT = "scripts/company-work-loop.js";
 
 export async function main(ns: NS): Promise<void> {
-	// Chain-launch company-work-loop.js first: it's RAM-cheaper and more urgent (money)
-	// than backdoor-loop.js/darknet-manager.js, so it gets first crack at any free RAM
-	// on a tight home budget instead of waiting behind them.
-	if (!ns.isRunning(COMPANY_WORK_LOOP_SCRIPT, "home")) {
-		const companyPid = await runWithRetry(ns, COMPANY_WORK_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-		if (companyPid === 0) {
-			ns.tprint(`rescan-loop: failed to start ${COMPANY_WORK_LOOP_SCRIPT} - check RAM/sync`);
-		}
-	}
-
-	// Chain-launch the next script in the bootstrap before continuing.
-	if (!ns.isRunning(BACKDOOR_LOOP_SCRIPT, "home")) {
-		const nextPid = await runWithRetry(ns, BACKDOOR_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-		if (nextPid === 0) {
-			ns.tprint(`rescan-loop: failed to start ${BACKDOOR_LOOP_SCRIPT} - check RAM/sync`);
-		}
-	}
-
 	while (true) {
+		// Both wait for home RAM to clear the threshold before even attempting to launch, so
+		// they can't compete with scan-loop/controller/weaken-grow-hack for RAM while home is
+		// this tight. Non-blocking ns.run(), re-checked every rescan cycle until each succeeds.
+		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
+			for (const lowerPriorityScript of [COMPANY_WORK_LOOP_SCRIPT, BACKDOOR_LOOP_SCRIPT]) {
+				if (ns.isRunning(lowerPriorityScript, "home")) continue;
+				const pid = ns.run(lowerPriorityScript);
+				if (pid === 0) {
+					ns.print(`rescan-loop: still waiting for RAM to start ${lowerPriorityScript}`);
+				}
+			}
+		}
+
 		await ns.sleep(RESCAN_INTERVAL_MS);
 
 		const pid = await runWithRetry(ns, SCAN_ROOT_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
