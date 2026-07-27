@@ -7,6 +7,7 @@ const GROW_SCRIPT = "scripts/grow.js";
 const HACK_SCRIPT = "scripts/hack.js";
 const WORKER_SCRIPTS = [WEAKEN_SCRIPT, GROW_SCRIPT, HACK_SCRIPT];
 const HACKNET_MANAGER_SCRIPT = "scripts/hacknet-manager.js";
+const HOME_RAM_LOOP_SCRIPT = "scripts/home-ram-loop.js";
 const BATTLESTATION_SCRIPT = "scripts/battlestation.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
@@ -443,6 +444,15 @@ export async function main(ns: NS): Promise<void> {
 		const hacknetPid = await runWithRetry(ns, HACKNET_MANAGER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
 		if (hacknetPid === 0) {
 			ns.tprint(`controller: failed to start ${HACKNET_MANAGER_SCRIPT} - check RAM/sync`);
+		}
+	}
+
+	// Chain-launch home-ram-loop.js ahead of battlestation.js: it's the fix for the RAM
+	// ceiling itself, so it gets first crack at any free RAM on a tight home budget.
+	if (!ns.isRunning(HOME_RAM_LOOP_SCRIPT, "home")) {
+		const homeRamPid = await runWithRetry(ns, HOME_RAM_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (homeRamPid === 0) {
+			ns.tprint(`controller: failed to start ${HOME_RAM_LOOP_SCRIPT} - check RAM/sync`);
 		}
 	}
 

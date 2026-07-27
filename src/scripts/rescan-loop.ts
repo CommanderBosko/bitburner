@@ -8,8 +8,19 @@ const LAUNCH_RETRY_ATTEMPTS = 5;
 const LAUNCH_RETRY_DELAY_MS = 3000;
 
 const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";
+const COMPANY_WORK_LOOP_SCRIPT = "scripts/company-work-loop.js";
 
 export async function main(ns: NS): Promise<void> {
+	// Chain-launch company-work-loop.js first: it's RAM-cheaper and more urgent (money)
+	// than backdoor-loop.js/darknet-manager.js, so it gets first crack at any free RAM
+	// on a tight home budget instead of waiting behind them.
+	if (!ns.isRunning(COMPANY_WORK_LOOP_SCRIPT, "home")) {
+		const companyPid = await runWithRetry(ns, COMPANY_WORK_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (companyPid === 0) {
+			ns.tprint(`rescan-loop: failed to start ${COMPANY_WORK_LOOP_SCRIPT} - check RAM/sync`);
+		}
+	}
+
 	// Chain-launch the next script in the bootstrap before continuing.
 	if (!ns.isRunning(BACKDOOR_LOOP_SCRIPT, "home")) {
 		const nextPid = await runWithRetry(ns, BACKDOOR_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
