@@ -11,6 +11,7 @@ const HOME_RAM_LOOP_SCRIPT = "scripts/home-ram-loop.js";
 const BATTLESTATION_SCRIPT = "scripts/battlestation.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
+const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
 // Consumed by server-purchase-manager.ts to stop buying/upgrading once purchased-server
 // capacity already covers every known target's weaken+grow+hack demand - see
 // estimateTargetDemandGb for what "demand" means here.
@@ -541,8 +542,9 @@ export async function main(ns: NS): Promise<void> {
 			earliestNext = Math.min(earliestNext, next);
 		}
 
-		// home-ram-loop.js is always allowed - it's the actual fix for the RAM ceiling - and only
-		// attempted after this tick's dispatch above has already claimed its RAM.
+		// home-ram-loop.js is always allowed, ungated by the 64GB threshold below - it's the
+		// actual fix for the RAM ceiling - and only attempted after this tick's dispatch above has
+		// already claimed its RAM.
 		if (!ns.isRunning(HOME_RAM_LOOP_SCRIPT, "home")) {
 			const pid = ns.run(HOME_RAM_LOOP_SCRIPT);
 			if (pid === 0) {
@@ -550,12 +552,29 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
-		// Everything else waits for home RAM to clear the threshold before even attempting to
-		// launch, so it can never compete with scan-loop/controller/weaken-grow-hack for RAM
-		// while home is this tight. Plain ns.run() (not runWithRetry, which sleeps between
-		// attempts and would stall dispatch) retried naturally every loop iteration.
+		// server-purchase-manager.js is also ungated by the 64GB threshold - buying/upgrading
+		// purchased servers directly grows the host pool dispatch itself draws from (see
+		// getHostPool), so it feeds hacking rather than competing with it for a separate resource.
+		// But its first launch attempt used to race scan-root.js's own boot-time launch of
+		// rescan-loop.js: controller.js starts running (and hits this block on its very first
+		// tick) while scan-root.js is still resident and mid-runWithRetry for rescan-loop.js, and
+		// 6.25GB of extra demand landing in that narrow window was enough to starve rescan-loop.js
+		// out (confirmed in-game: "scan-root: failed to start scripts/rescan-loop.js"). Gating this
+		// specific launch on rescan-loop.js already being up sidesteps the race entirely - by the
+		// time that's true, scan-root.js's main() is already returning (launching rescan-loop.js
+		// is its last action), so there's no meaningful contention window left.
+		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home") && !ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home")) {
+			const pid = ns.run(SERVER_PURCHASE_MANAGER_SCRIPT);
+			if (pid === 0) {
+				ns.print(`controller: still waiting for RAM to start ${SERVER_PURCHASE_MANAGER_SCRIPT}`);
+			}
+		}
+
+		// hacknet-manager.js/battlestation.js still wait for home RAM to clear the threshold
+		// before even attempting to launch, so they can never compete with scan-loop/controller/
+		// weaken-grow-hack (or server-purchase-manager.js) for RAM while home is this tight.
 		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
-			for (const lowerPriorityScript of [HACKNET_MANAGER_SCRIPT, BATTLESTATION_SCRIPT, SERVER_PURCHASE_MANAGER_SCRIPT]) {
+			for (const lowerPriorityScript of [HACKNET_MANAGER_SCRIPT, BATTLESTATION_SCRIPT]) {
 				if (ns.isRunning(lowerPriorityScript, "home")) continue;
 				const pid = ns.run(lowerPriorityScript);
 				if (pid === 0) {
