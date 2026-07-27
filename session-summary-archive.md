@@ -1,3 +1,29 @@
+## Session: 2026-07-20 — BitNode-1 strategy Q&A; faction/augment automation scoped then shelved (Singularity API locked pre-SF4)
+
+**Focus**: Explain how to complete BitNode 1, then scope a script to automate faction-reputation grinding and augmentation buying — discovered mid-scoping that it can't be built yet.
+
+### What changed (and why)
+- No code this session — pure strategy Q&A and scoping. Explained the BitNode-1 completion path (accumulate money/hacking power, then root + manually `hack` `w0r1d_d43m0n` once it appears) and confirmed augmentations are permanent for the save (persist across both augment installs and BitNode resets, unlike money/servers/scripts/faction rep).
+- Ran `/interview` on "build a script that buys augments across joined factions" per project rules. Mid-interview, checked `NetscriptDefinitions.d.ts` directly (via `ns-cost-lookup` + manual reading) instead of assuming the API was usable: the entire `Singularity` interface — `workForFaction`, `purchaseAugmentation`, `getAugmentationsFromFaction`, `getFactionRep`, `purchaseTor`, `purchaseProgram`, etc. — requires **owning Source-File 4** to call outside BitNode 4, or it throws at runtime. This save (BitNode 1, zero Source-Files) can't use any of it yet, so the script was shelved before writing code and manual in-game-UI strategy given instead.
+- Refreshed `project-state.md`/`README.md`, which had drifted behind two commits from the prior (unlogged) session — `lib/root.ts` split out of `network.ts`, and `backdoor-loop.ts`/`connect-to.ts`/`server-tree.ts` added — none of which had made it into the docs yet.
+
+### Decisions
+- Don't scope or write any script touching `ns.singularity.*` until Source-File 4 is confirmed owned (i.e. BitNode 4 has been completed once) — recorded in memory (`bitburner_singularity_locked`) so this isn't re-discovered from scratch next time it comes up.
+- The already-scoped brief for the faction/augment-buying script (cheapest-first buying with a percentage-of-cash floor, manual install step, joined-factions-only scope, best-available work type per faction, NeuroFlux Governor bought last) is preserved in `project-state.md`'s Next Steps for when SF4 is available — no need to re-interview from scratch then.
+
+### Issues / surprises
+- The Singularity API gate is a **hard runtime lock**, not just an expensive RAM multiplier — easy to assume it's "just pricier" and only find out by trying it in-game. Applies uniformly to TOR-router purchase and darkweb-program purchase too, not only faction/augment functions — so none of that category is automatable pre-SF4 either.
+- `backdoor-loop.ts` (added the prior session) already anticipated this exact gate — it catches the Singularity error and backs off to a 5-minute retry rather than crashing — which is why it wasn't a fresh discovery in-code, just newly confirmed against the doc source and extended to the TOR/program/augment functions too.
+
+### Next session
+- Manual push toward completing BitNode 1 (or, longer-term, toward BitNode 4 specifically, since finishing it grants Source-File 4 and unblocks the whole Singularity automation category).
+- Verify `backdoor-loop.js`'s real RAM cost via in-game `mem` once feasible; fold into the chain's steady-state RAM total.
+- Once SF4 is owned: pick the shelved faction/augment-buying brief back up.
+
+**Commits**: `d7abf6c..[pending session-close commit]` (2 prior-session commits now reflected in docs; 0 code commits this session)
+
+---
+
 ## Session: 2026-07-19 — Chain-launch bootstrap, two Bitburner RAM-analyzer bugs found, ns-cost-lookup skill
 
 **Focus**: Fix `activate.js` failing to launch its chain under `home` RAM pressure — which led through a full redesign to finding real bugs in Bitburner's own RAM analyzer.
