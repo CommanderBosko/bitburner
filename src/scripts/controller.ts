@@ -114,6 +114,16 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 	}
 }
 
+// darknet-manager.js is only ever launched via backdoor-loop.ts, which rescan-loop.ts itself
+// gates behind LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB - so reserving its RAM before home clears
+// that threshold holds capacity open for a script that can't run yet, starving weaken/grow/hack
+// dispatch for nothing. Recomputed live (not captured once at startup) so the reserve kicks in
+// automatically once home-ram-loop.js grows home past the threshold, without needing a restart.
+function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
+	const darknetReserveGb = hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) ? DARKNET_RAM_RESERVE_GB : 0;
+	return darknetReserveGb + serverTreeReserveGb;
+}
+
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
 	const freeRam = new Map<string, number>();
 	for (const host of hosts) {
@@ -448,7 +458,6 @@ export async function main(ns: NS): Promise<void> {
 	// - queried live rather than hardcoded like DARKNET_RAM_RESERVE_GB, since this is one fixed
 	// script's own static cost rather than a variable multi-dispatch worst case.
 	const serverTreeReserveGb = ns.getScriptRam(SERVER_TREE_SCRIPT, "home");
-	const reserveGb = DARKNET_RAM_RESERVE_GB + serverTreeReserveGb;
 	const scriptRamGb: ScriptRamGb = {
 		weaken: ns.getScriptRam(WEAKEN_SCRIPT, "home"),
 		grow: ns.getScriptRam(GROW_SCRIPT, "home"),
@@ -483,6 +492,7 @@ export async function main(ns: NS): Promise<void> {
 
 				const hosts = getHostPool(ns);
 				syncWorkerScripts(ns, hosts, syncedHosts);
+				const reserveGb = currentReserveGb(ns, serverTreeReserveGb);
 				const sizingFreeRam = computeFreeRam(ns, hosts, reserveGb);
 				let totalFreeRamGb = 0;
 				for (const free of sizingFreeRam.values()) totalFreeRamGb += free;
@@ -526,7 +536,7 @@ export async function main(ns: NS): Promise<void> {
 		// One shared, progressively-drained freeRam snapshot per tick - every target due this
 		// tick is dispatched against it in working-set (best-scored-first) order, so a higher-
 		// scored target's demand is fully funded before any leftover RAM cascades to the next.
-		const freeRam = computeFreeRam(ns, hosts, reserveGb);
+		const freeRam = computeFreeRam(ns, hosts, currentReserveGb(ns, serverTreeReserveGb));
 
 		let earliestNext = Infinity;
 		for (const target of workingSet) {
