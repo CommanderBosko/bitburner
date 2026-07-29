@@ -327,20 +327,32 @@ function buildWorkingSet(ns: NS, candidates: ServerReport[], totalFreeRamGb: num
 		if (needed <= 0) continue;
 
 		const minUnit = minFundableUnitRamGb(ns, candidate.hostname, scriptRamGb);
-		if (workingSet.length > 0 && poolRemaining < minUnit) break;
+		// `candidates` is sorted by score (maxMoney / minSecurity), not by RAM cost, so an
+		// unfundable candidate here does NOT mean every lower-scored candidate after it is also
+		// unfundable - confirmed in-game: a top-scored target needing a 700+-thread batch sat right
+		// above several trivially-cheap targets (a handful of threads each) further down the same
+		// list. `continue` past it instead of `break`-ing the whole loop, so those still get a
+		// chance.
+		if (workingSet.length > 0 && poolRemaining < minUnit) continue;
 
 		workingSet.push(candidate);
 		// A candidate that can't fund even one unit (one batch, or one weaken/grow thread)
 		// consumes nothing from the pool this cycle - dispatchTarget/dispatchBatch won't launch
-		// anything for it either. Only debit the pool when it actually can, and never past what's
-		// left - `needed` is a demand ceiling (for a primed target, the full concurrent-batch
-		// pipeline depth, not just what one cycle spends), so subtracting it unconditionally could
-		// drive poolRemaining deeply negative and make every candidate after this one fail the
-		// `poolRemaining < minUnit` check above, even ones the real (unpoisoned) pool could easily
-		// fund. Confirmed in-game: a single expensive top-scored target (demand >> total pool) was
-		// starving every other target out of the working set, leaving 100% of RAM idle.
+		// anything for it either. Only debit the pool when it actually can, and debit by `minUnit`
+		// (this candidate's own one-batch/one-thread cost) rather than `needed` - `needed` is an
+		// unbounded demand CEILING (for a primed target, as many concurrent batches as timing
+		// allows, easily 10-100x one batch's real cost; for an unprimed target near $0 money, the
+		// full desired regrow thread count), not what this candidate actually consumes before the
+		// next candidate is considered. Debiting the full ceiling let an admitted candidate whose
+		// own `minUnit` was cheap enough to pass the gate above still zero out poolRemaining via its
+		// bloated `needed`, locking out every genuinely-cheaper candidate after it - confirmed
+		// in-game: with a fleet of many 8GB purchased servers, the 2nd-ranked candidate's ceiling
+		// alone drained the whole pool, leaving 12+ trivially-fundable targets (foodnstuff,
+		// joesguns, n00dles, etc.) permanently excluded from the working set even though the fleet
+		// had ample real capacity for all of them. `minUnit` is bounded by definition (one thread,
+		// or one whole batch) so it can't overshoot the way `needed` does.
 		if (poolRemaining >= minUnit) {
-			poolRemaining = Math.max(0, poolRemaining - needed);
+			poolRemaining = Math.max(0, poolRemaining - minUnit);
 		}
 	}
 
@@ -421,7 +433,16 @@ function dispatchBatch(ns: NS, hostname: string, hosts: string[], freeRam: Map<s
 
 	const scratch = new Map(freeRam);
 	for (const op of ops) {
-		if (allocatedThreads(planHostAllocation(ns, op.script, op.threads, hosts, scratch)) < op.threads) return false;
+		const funded = allocatedThreads(planHostAllocation(ns, op.script, op.threads, hosts, scratch));
+		if (funded < op.threads) {
+			let poolGb = 0;
+			for (const gb of scratch.values()) poolGb += gb;
+			ns.print(
+				`dispatchBatch(${hostname}): can't fund ${op.script} - need ${op.threads} threads, ` +
+					`only ${funded} fundable (${poolGb.toFixed(2)}GB free across pool, ${ns.getScriptRam(op.script, "home").toFixed(2)}GB/thread)`,
+			);
+			return false;
+		}
 	}
 
 	commitAllocation(ns, WEAKEN_SCRIPT, hostname, plan.weaken1DelayMs, planHostAllocation(ns, WEAKEN_SCRIPT, plan.weaken1Threads, hosts, freeRam));
@@ -458,7 +479,15 @@ function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<
 		const weakenLaunched = dispatch(ns, WEAKEN_SCRIPT, weakenThreads, hostname, hosts, freeRam);
 		const growLaunched = dispatch(ns, GROW_SCRIPT, desiredGrowThreads, hostname, hosts, freeRam);
 
-		if (weakenLaunched < 1 && growLaunched < 1) return NO_RAM_RETRY_MS;
+		if (weakenLaunched < 1 && growLaunched < 1) {
+			let poolGb = 0;
+			for (const gb of freeRam.values()) poolGb += gb;
+			ns.print(
+				`dispatchTarget(${hostname}) prep: can't fund weaken (want ${weakenThreads}) or grow ` +
+					`(want ${desiredGrowThreads}, fundable ${fundableGrowThreads}) - ${poolGb.toFixed(2)}GB free across pool`,
+			);
+			return NO_RAM_RETRY_MS;
+		}
 
 		return (
 			Math.max(
@@ -475,6 +504,13 @@ function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<
 }
 
 export async function main(ns: NS): Promise<void> {
+	// Every ns.* getter/analysis call this loop makes (getServerMaxRam, getServerUsedRam,
+	// getServerSecurityLevel, sleep, etc.) auto-logs its return value by default - at ~24 hosts
+	// scanned per tick, that's hundreds of spam lines every 30s, which was flooding the tail
+	// buffer and evicting this file's own diagnostic ns.print calls before they could ever be
+	// read. Disabled wholesale; explicit ns.print/ns.tprint calls are unaffected by disableLog.
+	ns.disableLog("ALL");
+
 	// scan-loop (scan-root.js/rescan-loop.js), controller.js (this script), and the
 	// weaken/grow/hack dispatch below are the three must-run priorities. Every other manager
 	// (home-ram-loop.js, hacknet-manager.js, battlestation.js, server-purchase-manager.js) is
@@ -527,6 +563,9 @@ export async function main(ns: NS): Promise<void> {
 
 				workingSet = buildWorkingSet(ns, candidates, totalFreeRamGb, scriptRamGb);
 				const desiredHostnames = new Set(workingSet.map((t) => t.hostname));
+				ns.print(
+					`buildWorkingSet: ${candidates.length} candidates, ${totalFreeRamGb.toFixed(2)}GB free pool -> admitted [${workingSet.map((t) => t.hostname).join(", ")}]`,
+				);
 
 				// Only written while there's at least one real candidate - if scan-root hasn't
 				// found/rooted anything yet, leaving this file unwritten (rather than writing a
