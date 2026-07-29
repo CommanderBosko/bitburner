@@ -581,13 +581,11 @@ export async function main(ns: NS): Promise<void> {
 
 				for (const hostname of desiredHostnames) {
 					if (!nextDispatchAt.has(hostname)) {
-						ns.tprint(`Now attacking ${hostname}!`);
 						nextDispatchAt.set(hostname, now);
 					}
 				}
 				for (const hostname of [...nextDispatchAt.keys()]) {
 					if (desiredHostnames.has(hostname)) continue;
-					ns.tprint(`Dropping ${hostname} - out of working set (score or RAM)`);
 					nextDispatchAt.delete(hostname);
 				}
 			}
