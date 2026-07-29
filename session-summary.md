@@ -1,3 +1,32 @@
+## Session: 2026-07-29 (later same day) — Root-caused the *real* $0-income cause: pserver RAM fragmentation, past the earlier buildWorkingSet fix
+
+**Focus**: User asked "is this ok?" about an Active Scripts screenshot showing `$0.000/sec` production; live-diagnose whether the earlier same-day `c344ad9` fix had actually resolved the $0-income problem, since it hadn't been confirmed with decisive evidence yet.
+
+### What changed (and why)
+- Read through `controller.ts`'s dispatch model first to answer an initial, simpler question ("should servers be attacking different hosts?") — no, by design: threads are drawn from the whole host pool per-target, not pinned one-server-one-target.
+- Screenshot review flagged `Total production: $0.000/sec` as suspicious given the `c344ad9` fix from earlier the same day was supposed to have resolved exactly this symptom. Asked how long `controller.js` had been running post-fix; user said 15+ minutes — long enough to rule out "still warming up," per the standing rule to verify live-game fixes with decisive evidence, not assume from ambiguous signals.
+- Asked for and received two pieces of ground truth: `analyze` output on `zer0` (in-game terminal) and a `controller.js` tail-log paste. The tail showed `dispatchTarget`/`dispatchBatch` reporting `fundable 0` for every one of 13 admitted targets, despite each line also reporting a nonzero 26GB pool-wide free-RAM total — the real smoking gun.
+- Traced this to `planHostAllocation` allocating per-host (not from a pooled sum): every purchased server sits at the 8GB starting tier, fitting exactly 4 threads of `weaken.js`/`grow.js` (4 × 1.75GB = 7GB) and permanently stranding ~1GB per host — below even one more thread's cost, everywhere, regardless of which target(s) are scheduled.
+- Root-caused *why* the fleet stayed on 8GB tiers forever: `server-purchase-manager.ts`'s candidate ranking (`cost/gainedRam`) is an exact tie between buying new at 8GB and doubling any existing server, since Bitburner's cloud server cost is linear in RAM. `Array.sort`'s stability always kept the "buy" candidate (pushed first in `collectCandidates`) on top of that tie, so the fleet only ever grew by adding more 8GB boxes and never consolidated. Fixed with an epsilon tie-break favoring `"upgrade"` (`f2ccfc8`), delegated to a fork agent while doing the diagnosis in the main thread.
+- User had approved a two-part fix plan ("both": tighten `buildWorkingSet`'s admission bar, and fix pserver sizing). While starting the admission-bar half, re-traced `main()`'s per-tick loop and found it always processes `workingSet` in fixed score-descending order — the top-scored due target always gets first claim on `freeRam` regardless of working-set width, so admitting 13 targets instead of 3 isn't actually starving anyone. Told the user directly and skipped that edit rather than shipping a change with no behavioral effect.
+- Separately, at the user's request, removed the `ns.tprint("Now attacking...")`/`"Dropping..."` per-target announcements (`f96635d`) — pure leftover noise from the old single-target model, now firing on every admission/removal across a working set that can hold a dozen-plus targets at once.
+
+### Decisions
+- Verified the sub-agent's diff directly (`git diff`) before reporting it as done, rather than trusting its self-report at face value.
+- Chose not to make the `buildWorkingSet` admission-bar change even though it had been pre-approved, once re-derivation showed it wasn't causal — consistent with not fixing scenarios that can't happen.
+
+### Issues / surprises
+- The earlier same-day `c344ad9` `buildWorkingSet` fix was real and necessary (working set correctly held all 13 fundable candidates) but **not sufficient** — it fixed a genuine admission-logic bug that was never actually the thing blocking income. Worth remembering that a confirmed, real bug fix doesn't guarantee the reported symptom is resolved; the underlying stall had two independent causes stacked on top of each other.
+- RAM fragmentation from small purchased-server tiers is structural, not something any dispatch-side scheduling logic can route around — the only real fix was upstream, in what size servers get bought in the first place.
+
+### Next session
+- Verify `f2ccfc8` in-game: restart `server-purchase-manager.js`/`controller.js`, confirm `"upgraded pserv-... to Xgb"` log lines (not more 8GB purchases), confirm `fundable 0` lines disappear, confirm `Total production` climbs above $0.
+- See `project-state.md` for the full current-state writeup and remaining open items.
+
+**Commits**: `e6ecab9..f96635d` (2 commits this session: `f2ccfc8`, `f96635d`)
+
+---
+
 ## Session: 2026-07-29 — Root-caused and fixed the post-BN4-reset "$0 income" stall in controller.ts
 
 **Focus**: User reported hacking scripts earning literally $0 over a 5h40m offline run despite 25 purchased servers and many rooted world targets; live-debug to find and fix the real cause rather than guess.
@@ -109,60 +138,6 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - Toward BitNode 4 completion: Daedalus invite → Red Pill → hack `w0r1d_d43m0n` (manual, not scriptable pre-SF4).
 
 **Commits**: `a88282c`..`da1c6cd` (11 commits)
-
----
-
-## Session: 2026-07-23 — HWGW batching in controller.ts, hacknet Formulas.exe dependency dropped
-
-**Focus**: User asked why purchased-server RAM sat unused in Active Scripts; traced it to the tier-2 dispatch model's demand ceiling, then implemented true HWGW batching to remove it — then fixed a live crash the user hit mid-verification.
-
-### What changed (and why)
-- User noticed most purchased servers showed no running scripts in the in-game Active Scripts tab despite `scan` showing them all rooted. Explained the tab only lists hosts with something currently running, then traced the real cause: `battlestation.ts` showed only ~8.7TB of ~1.6PB purchased RAM in use (~0.5%). Root-caused to the tier-2 proportional-simultaneous-WGH dispatch model (`controller.ts`) — a target's demand is capped by its own live security/money state, not by available RAM, so once every candidate target's one-round demand was funded, the rest of the purchased fleet had nothing to do.
-- User asked to look at what true HWGW batching would take, then to implement it. Two design decisions settled via `AskUserQuestion` before coding: skip `Formulas.exe` (recompute each batch's `additionalMsec` delays from live `getHackTime`/`getGrowTime`/`getWeakenTime` right before launch, both to dodge the augment-reset wipe risk and the desync-under-precompute fragility the original tier-2 research flagged) and wire batching into the existing multi-target working set in the same pass rather than single-target-first.
-- Implemented in `controller.ts`: `computeBatchPlan`/`dispatchBatch` for primed targets (self-contained hack→weaken→grow→weaken batches, standard "anchor on the weakens" timing layout, queued every `MIN_BATCH_PERIOD_MS`), `dispatchBatch`'s all-or-nothing funding check (a partial batch would leave the target's security uncorrected for every other in-flight batch), and a timing-derived (not RAM-derived) demand ceiling so `server-purchase-manager.ts`'s stop-buying logic stays meaningful. `hack.ts`/`grow.ts`/`weaken.ts` gained a delay arg passed as `additionalMsec`.
-- `ram-audit` caught that the new code used `??` in four spots — a phantom-RAM-charge trigger already documented in this repo's own memory/`SKILL.md` from a prior session. Fixed all four to explicit ternaries before considering the build done; a reminder that a rule already in memory still needs to actually be applied, not just known.
-- Mid-verification, the user hit a live runtime crash: an augment install (not part of this session) wiped `Formulas.exe`, breaking `hacknet-manager.ts`'s `ns.formulas.hacknetNodes.moneyGainRate()` call (added just one session prior, `14e0c23`). Reverted to the exact hand-rolled approximation that call had replaced, made permanent this time — the fix isn't "re-buy Formulas.exe," since every home `.exe` is wiped on every augment install, not just this once.
-
-### Decisions
-- No RAM-spanning reservation ledger was needed for batching — `ns.getServerUsedRam()` already reflects real running processes for their whole in-game duration, so the existing per-tick `computeFreeRam()` snapshot is sufficient; the only real change needed was tick frequency (as tight as `MIN_BATCH_PERIOD_MS` per active target, vs. one per full WGH round before).
-- Any hard dependency on a home `.exe` program (this session: `Formulas.exe`) is a standing bug in this repo, not a one-off fix — augment installs wipe all of them, confirmed twice now.
-
-### Issues / surprises
-- Batching's actual in-game behavior is unverified — build and `ram-audit` are clean, but the user couldn't test yet (blocked by the Formulas.exe crash, now fixed). Also flagged but untested: `computeFreeRam`'s full ~94-host rescan every tick may or may not keep up at the new, much tighter `MIN_BATCH_PERIOD_MS` (80ms) cadence.
-
-### Next session
-- Verify HWGW batching in-game: batches actually landing in order on primed targets, money/security staying stable, purchased-server RAM utilization rising well past ~0.5%, and the tight dispatch-loop cadence not falling behind schedule at ~94 hosts.
-- Re-verify `controller.js`/`hacknet-manager.js`'s real RAM cost via in-game `mem` against the static estimates (11.50GB / 8.70GB) now that both changed again this session.
-
-**Commits**: `3e260c3` (1 commit)
-
----
-
-
-**Focus**: Ran skill-upgrade/skill-suggestion over the backlog since the last close, then fixed a live in-game darknet crash the user hit, then took `server-tree.ts` back out of the chain-launch.
-
-### What changed (and why)
-- Ran `skill-upgrade` scoped to activity since its last real invocation (2026-07-21): found `new-background-loop`'s `scaffold-loop.sh` had a documented Gotcha for a `sed a\` multi-line-corruption bug, but the prescribed fix was never actually applied to the script — so it recurred identically on the next scaffold call. Fixed it for real this time (temp-file + sed `r`), verified against a scratch clone of the repo, not just re-documented.
-- Ran `skill-suggestion` over the same window: proposed and built `commit-and-push` (chains the existing `git-commit`/`git-push` skills) — lives in the NixOS dotfiles repo, not this one, since it's a general git workflow.
-- Committed a pre-existing uncommitted change from before this session: `hacknet-manager.ts`'s `moneyGainRate` now calls `ns.formulas.hacknetNodes.moneyGainRate()` directly, now that `Formulas.exe` is owned.
-- User reported a live in-game runtime error: `dnet.connectToSession: Invalid host: 'chongq1ng'` crashing `darknet-agent-value.js`. Root-caused to `connectToSession` throwing (not returning a graceful failure) when a hop has moved/gone offline mid-path — a gap in the existing "servers can go offline" defensive pattern, which only covered the final crack target, not intermediate hops. Fixed all three worker scripts (recon/value/crack) with try/catch, then (on request) closed the loop: workers report the failure back to `darknet-manager.ts` via a new `hopFailed` port message, which marks that hop `unresolvable` (pruning every deeper descendant too via `buildPathTo`) and auto-recovers it if legitimately rediscovered later.
-- Took `server-tree.ts` back out of the chain-launch per user request — they want to launch it manually, not have it auto-start. Its RAM cost is still reserved (via live `ns.getScriptRam`, not hardcoded) so a manual launch is never blocked.
-- Along the way, updated the `git-commit` skill (NixOS repo) to ask before silently leaving unrelated uncommitted work out of a commit, after it had done exactly that with the `hacknet-manager.ts` change above.
-- Refreshed `project-state.md`, which had drifted behind 4 commits from a prior unclosed session (`2039b97`..`65790c7`: hacknet payback-cap revert, darknet automation, server-tree chain-launch) — folded those into the docs from commit history, without inventing rationale beyond what's in those commits.
-
-### Decisions
-- A documented gotcha with an unapplied fix behaves like an undocumented one — when `skill-upgrade` finds this pattern, apply the fix in the same pass rather than re-describing it.
-- Hop-failure handling in the darknet scripts: mark the hop `unresolvable` (reusing the existing status field, not a new one) rather than deleting it from the knowledge base outright, so it can recover automatically if rediscovered.
-
-### Issues / surprises
-- The `scaffold-loop.sh` bug's "documented but unfixed" gap was only found because `git log`/`controller.ts` showed both `battlestation.ts` and `server-tree.ts` had been hard-wired directly into `controller.ts` instead of the automatic chain-tail — strong indirect evidence the automatic wiring had failed both times.
-
-### Next session
-- Watch `darknet-manager` logs in-game for `marked unresolvable (hop failed)` to confirm the fix actually fires and prunes correctly, not just compiles clean.
-- Re-verify chain-script RAM costs via in-game `mem` — `battlestation.ts`, `backdoor-loop.ts`, and the darknet scripts are all still estimated, not measured.
-- Run `server-tree.js` manually whenever a network-tree view is wanted; it's no longer auto-launched.
-
-**Commits**: `77b8f53..957e591` (4 commits this session; 4 earlier commits since the last close — `2039b97`, `2f6f848`, `83eb468`, `65790c7` — belong to a prior session that wasn't closed out, not to this one)
 
 ---
 
