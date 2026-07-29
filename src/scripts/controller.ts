@@ -159,27 +159,36 @@ interface PrepPlan {
 	grow: number;
 }
 
-// Continuous prep: restore money and clear security on a target that isn't primed yet (see
-// isPrimed). Not batched - just plain weaken/grow sized off live state, one round at a time.
-function computePrepPlan(ns: NS, hostname: string): PrepPlan {
-	const security = ns.getServerSecurityLevel(hostname);
-	const minSecurity = ns.getServerMinSecurityLevel(hostname);
+function computeGrowThreads(ns: NS, hostname: string): number {
 	const money = ns.getServerMoneyAvailable(hostname);
 	const maxMoney = ns.getServerMaxMoney(hostname);
+	if (money >= maxMoney * MONEY_THRESHOLD || maxMoney <= 0) return 0;
 
-	const excessSecurity = security - minSecurity;
-	let growThreads = 0;
-	if (money < maxMoney * MONEY_THRESHOLD && maxMoney > 0) {
-		const growMultiplier = money > 0 ? maxMoney / money : maxMoney;
-		growThreads = Math.max(0, Math.ceil(ns.growthAnalyze(hostname, growMultiplier)));
-	}
+	const growMultiplier = money > 0 ? maxMoney / money : maxMoney;
+	return Math.max(0, Math.ceil(ns.growthAnalyze(hostname, growMultiplier)));
+}
 
+// weakenThreads only needs to counter security from growThreads that will actually run - see the
+// dispatchTarget prep branch, which dry-runs RAM allocation to find that real, fundable count
+// before calling this. computePrepPlan (below) still passes the full, uncapped desired grow
+// count for demand-estimation callers that intentionally want the RAM-unlimited figure.
+function computeWeakenThreads(ns: NS, hostname: string, growThreads: number): number {
+	const security = ns.getServerSecurityLevel(hostname);
+	const minSecurity = ns.getServerMinSecurityLevel(hostname);
+	const excessSecurity = Math.max(0, security - minSecurity);
 	const addedSecurity = ns.growthAnalyzeSecurity(growThreads, hostname);
-	const securityToClear = Math.max(0, excessSecurity) + addedSecurity;
+	const securityToClear = excessSecurity + addedSecurity;
 	const weakenPerThread = ns.weakenAnalyze(1);
-	const weakenThreads = securityToClear > 0 && weakenPerThread > 0 ? Math.ceil(securityToClear / weakenPerThread) : 0;
+	return securityToClear > 0 && weakenPerThread > 0 ? Math.ceil(securityToClear / weakenPerThread) : 0;
+}
 
-	return { weaken: weakenThreads, grow: growThreads };
+// Continuous prep: restore money and clear security on a target that isn't primed yet (see
+// isPrimed). Not batched - just plain weaken/grow sized off live state, one round at a time. Used
+// for RAM-unlimited demand estimation (estimateTargetDemandGb/minFundableUnitRamGb) - real
+// dispatch (dispatchTarget) sizes weaken off the RAM-capped grow count instead, not this.
+function computePrepPlan(ns: NS, hostname: string): PrepPlan {
+	const growThreads = computeGrowThreads(ns, hostname);
+	return { weaken: computeWeakenThreads(ns, hostname, growThreads), grow: growThreads };
 }
 
 interface BatchPlan {
@@ -317,13 +326,22 @@ function buildWorkingSet(ns: NS, candidates: ServerReport[], totalFreeRamGb: num
 		const needed = estimateTargetDemandGb(ns, candidate.hostname, scriptRamGb);
 		if (needed <= 0) continue;
 
-		if (workingSet.length > 0) {
-			const minUnit = minFundableUnitRamGb(ns, candidate.hostname, scriptRamGb);
-			if (poolRemaining < minUnit) break;
-		}
+		const minUnit = minFundableUnitRamGb(ns, candidate.hostname, scriptRamGb);
+		if (workingSet.length > 0 && poolRemaining < minUnit) break;
 
 		workingSet.push(candidate);
-		poolRemaining -= needed;
+		// A candidate that can't fund even one unit (one batch, or one weaken/grow thread)
+		// consumes nothing from the pool this cycle - dispatchTarget/dispatchBatch won't launch
+		// anything for it either. Only debit the pool when it actually can, and never past what's
+		// left - `needed` is a demand ceiling (for a primed target, the full concurrent-batch
+		// pipeline depth, not just what one cycle spends), so subtracting it unconditionally could
+		// drive poolRemaining deeply negative and make every candidate after this one fail the
+		// `poolRemaining < minUnit` check above, even ones the real (unpoisoned) pool could easily
+		// fund. Confirmed in-game: a single expensive top-scored target (demand >> total pool) was
+		// starving every other target out of the working set, leaving 100% of RAM idle.
+		if (poolRemaining >= minUnit) {
+			poolRemaining = Math.max(0, poolRemaining - needed);
+		}
 	}
 
 	return workingSet;
@@ -426,9 +444,19 @@ function dispatchBatch(ns: NS, hostname: string, hosts: string[], freeRam: Map<s
 // batch's landings gets filled by others.
 function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<string, number>): number {
 	if (!isPrimed(ns, hostname)) {
-		const plan = computePrepPlan(ns, hostname);
-		const weakenLaunched = dispatch(ns, WEAKEN_SCRIPT, plan.weaken, hostname, hosts, freeRam);
-		const growLaunched = dispatch(ns, GROW_SCRIPT, plan.grow, hostname, hosts, freeRam);
+		const desiredGrowThreads = computeGrowThreads(ns, hostname);
+		// Weaken must only counter security that will actually be added this tick, not the full
+		// desired regrow plan - a target sitting near $0 money can want hundreds of thousands of
+		// grow threads, and sizing weaken off that uncapped number makes weaken alone request more
+		// threads than all available RAM could ever fund, starving grow (and hack, forever) out of
+		// every cycle even though only a small fraction of that grow plan will ever actually run.
+		// Dry-run the grow allocation against a scratch copy of freeRam first to find the real,
+		// fundable thread count, then size weaken off that instead.
+		const fundableGrowThreads = allocatedThreads(planHostAllocation(ns, GROW_SCRIPT, desiredGrowThreads, hosts, new Map(freeRam)));
+		const weakenThreads = computeWeakenThreads(ns, hostname, fundableGrowThreads);
+
+		const weakenLaunched = dispatch(ns, WEAKEN_SCRIPT, weakenThreads, hostname, hosts, freeRam);
+		const growLaunched = dispatch(ns, GROW_SCRIPT, desiredGrowThreads, hostname, hosts, freeRam);
 
 		if (weakenLaunched < 1 && growLaunched < 1) return NO_RAM_RETRY_MS;
 
@@ -554,8 +582,14 @@ export async function main(ns: NS): Promise<void> {
 
 		// home-ram-loop.js is always allowed, ungated by the 64GB threshold below - it's the
 		// actual fix for the RAM ceiling - and only attempted after this tick's dispatch above has
-		// already claimed its RAM.
-		if (!ns.isRunning(HOME_RAM_LOOP_SCRIPT, "home")) {
+		// already claimed its RAM. But it's also gated on rescan-loop.js already running, same as
+		// server-purchase-manager.js below and for the same reason: without SF4-tier-1,
+		// ns.singularity.upgradeHomeRam costs 48GB (base 3GB * the 16x pre-SF4 multiplier), and an
+		// unconditional attempt here on controller.js's very first tick reintroduced the exact
+		// "scan-root: failed to start scripts/rescan-loop.js" boot race that fix was written for -
+		// just via this script instead of server-purchase-manager.js, which the earlier fix didn't
+		// cover.
+		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home") && !ns.isRunning(HOME_RAM_LOOP_SCRIPT, "home")) {
 			const pid = ns.run(HOME_RAM_LOOP_SCRIPT);
 			if (pid === 0) {
 				ns.print(`controller: still waiting for RAM to start ${HOME_RAM_LOOP_SCRIPT}`);
