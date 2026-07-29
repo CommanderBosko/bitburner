@@ -95,8 +95,22 @@ export async function main(ns: NS): Promise<void> {
 		if (affordable.length > 0) {
 			// Greedy cheapest-RAM-per-dollar first, same shape as hacknet-manager.ts's
 			// cost/gain ordering - one purchase per tick keeps each decision cheap to
-			// recompute as prices and cash change.
-			affordable.sort((a, b) => a.cost / a.gainedRam - b.cost / b.gainedRam);
+			// recompute as prices and cash change. Cloud server cost scales linearly with
+			// RAM, so cost/gainedRam is an exact tie between buying new at STARTING_RAM_GB
+			// and upgrading any existing server - without a tiebreaker, Array.sort's
+			// stability always keeps the "buy" candidate (pushed first in collectCandidates)
+			// on top, so the fleet only ever grows by adding more STARTING_RAM_GB servers and
+			// never consolidates. That fragments RAM into many tiny hosts, each of which can
+			// end up with less free RAM than a single worker thread costs once filled -
+			// stranding capacity no target can actually use. Break ties toward "upgrade"
+			// instead, so the fleet consolidates into fewer, larger servers.
+			const RATIO_EPSILON = 1e-9;
+			affordable.sort((a, b) => {
+				const ratioDiff = a.cost / a.gainedRam - b.cost / b.gainedRam;
+				if (Math.abs(ratioDiff) > RATIO_EPSILON) return ratioDiff;
+				if (a.kind === b.kind) return 0;
+				return a.kind === "upgrade" ? -1 : 1;
+			});
 			const best = affordable[0];
 			if (applyCandidate(ns, best)) {
 				const label = best.kind === "buy" ? "purchased new server" : `upgraded ${best.hostname}`;
