@@ -1,3 +1,31 @@
+## Session: 2026-07-29 — Root-caused and fixed the post-BN4-reset "$0 income" stall in controller.ts
+
+**Focus**: User reported hacking scripts earning literally $0 over a 5h40m offline run despite 25 purchased servers and many rooted world targets; live-debug to find and fix the real cause rather than guess.
+
+### What changed (and why)
+- Started from a screenshot of the offline-progress popup ($0 scripted income, $552k from Hacknet) and worked through several rounds of live diagnosis: checked whether `controller.js` was running stale pre-fix code (it wasn't — already restarted), got the user's server tree (25 purchased 8GB servers, ~14 rooted+hackable world targets), then `/data/servers.json`, then added temporary `ns.print` diagnostics to `controller.ts` and had the user paste real tail-log output across multiple restart-and-check rounds.
+- Found two real bugs in `buildWorkingSet`, both independent of the RAM-dispatch fixes from the previous session (`25790fa`): (1) it debited the simulated RAM pool by `needed` (an unbounded demand ceiling, up to ~100x a target's real one-batch cost) instead of `minUnit` (the actual fundable-unit cost) — letting one admitted, barely-fundable candidate zero out the pool and starve everyone after it; (2) it used `break` instead of `continue` when a candidate couldn't be funded, wrongly assuming RAM cost tracks the score-sorted candidate order — `omega-net` (top-scored, needing 732 hack threads, ~5-6x the whole fleet's capacity) was stopping the loop before it ever reached `foodnstuff`/`joesguns`/`n00dles`/etc.
+- Also discovered `controller.ts` never called `ns.disableLog` — default auto-logging of every `ns.*` getter (~24 hosts scanned per tick) was flooding the tail buffer and hiding the very diagnostics added to find the bug above. Added `ns.disableLog("ALL")` plus permanent (not just temporary) diagnostic prints in `buildWorkingSet`/`dispatchBatch`/`dispatchTarget`, since they're cheap and would have made this a one-round-trip fix instead of several.
+- Confirmed fixed in-game: working set went from `[omega-net]` only to all 13 fundable candidates, and Active Scripts showed real `weaken.js` threads spread across the pserv fleet targeting `phantasy` — correct, expected saturation behavior for a fleet with a badly-neglected highest-priority target, not a bug.
+- User explicitly asked to double-check before committing at two points; both checks (Active Scripts screenshot, math cross-check on the reported free-RAM figure) confirmed the fix was real rather than just quiet on the surface.
+
+### Decisions
+- Kept the diagnostic `ns.print` calls in `controller.ts` permanently rather than stripping them post-fix — they only print on failure or once per 30s, and this investigation would have been a single round-trip instead of several if they'd existed from the start.
+- Didn't touch `omega-net`'s perpetual failed-retry behavior — it's genuinely too big for the current fleet (not a bug), so left it as a known, harmless tech-debt item rather than adding backoff/deprioritization logic that wasn't asked for.
+
+### Issues / surprises
+- The RAM-starvation bug the user hit was a *different* bug from the one fixed in the immediately-prior session (`25790fa`) — that fix addressed a real issue but didn't cover this one, both living in the same function (`buildWorkingSet`). Two independent bugs in one small function is worth remembering if `buildWorkingSet` needs touching again.
+- Default Bitburner auto-logging turned out to be an active obstacle to debugging this specific problem, not just noise — it directly hid the diagnostic evidence needed to find the real bug on the first attempt.
+
+### Next session
+- Confirm `phantasy` eventually gets primed and money climbs from real scripted hacking (not just Hacknet/faction income).
+- Investigate why `home-ram-loop.ts` hasn't grown `home` past 32GB in 3+ days of continuous running.
+- See `project-state.md` for the full current-state writeup and remaining open items.
+
+**Commits**: `6eac25b..c344ad9` (1 commit this session, `c344ad9`; `6eac25b` and `25790fa` belong to prior unclosed sessions, not this one)
+
+---
+
 ## Session: 2026-07-27 — Doc close-out: ungate server-purchase-manager, fix boot race with rescan-loop
 
 **Focus**: Doc close-out for a prior unclosed session's single commit — this conversation itself made no code changes (transcript contains only the `/session-closer` invocation).
@@ -135,31 +163,6 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - Run `server-tree.js` manually whenever a network-tree view is wanted; it's no longer auto-launched.
 
 **Commits**: `77b8f53..957e591` (4 commits this session; 4 earlier commits since the last close — `2039b97`, `2f6f848`, `83eb468`, `65790c7` — belong to a prior session that wasn't closed out, not to this one)
-
----
-
-## Session: 2026-07-21 — Hacknet ROI Q&A; capped hacknet-manager purchases at a 30-min payback period
-
-**Focus**: Answer whether Hacknet is the best early-game money-maker, then fix the observed overspend once the user noticed cumulative Hacknet spend exceeding cumulative income.
-
-### What changed (and why)
-- Explained Hacknet's exponential-cost-vs-linear-gain ROI curve and why the scripted weaken/grow/hack loop generally outpaces it as a primary income source (per the project's existing `bitburner-early-game-strategy` memory).
-- User reported that in `hacknet-manager.ts`, cumulative spend was consistently beating cumulative income even with Hacknet augments installed. Traced it to `hacknet-manager.ts`'s purchase loop having no ceiling on payback period — it bought the cheapest-payback affordable option every cycle regardless of how bad that payback got once cheap upgrades ran out.
-- Ran a scoped interview (single already-diagnosed fix, so used the lightweight clarifying-questions path rather than the full brief ceremony) to pin down the cutoff value and whether `RESERVE_FRACTION` should also change. User picked a 30-minute payback cutoff, left `RESERVE_FRACTION` at 10%.
-- Added `MAX_PAYBACK_SECONDS = 1800` and a `p.cost / p.gain <= MAX_PAYBACK_SECONDS` filter term in `hacknet-manager.ts`'s buy loop — a 2-line diff. `npm run build` confirmed clean.
-- Refreshed `project-state.md`, which had drifted behind two commits from a prior unclosed session (`battlestation.ts` HUD, `reorder-chain-launch` skill, terminal target-printing in `controller.ts`) — folded those into the docs from commit history, without inventing rationale beyond what the commit messages already state.
-
-### Decisions
-- 30-minute payback cutoff, `RESERVE_FRACTION` unchanged at 10% — see `project-state.md` Recent Decisions for the full why.
-
-### Issues / surprises
-- None — small, well-scoped fix; no build or logic surprises. In-game confirmation (watching `hacknet-manager` logs to verify it actually stops buying once payback exceeds 30 min) is still pending, noted as a next step.
-
-### Next session
-- Watch `hacknet-manager` logs in-game to confirm the 30-min cutoff behaves as intended; retune `MAX_PAYBACK_SECONDS` if needed.
-- Re-verify chain-script RAM costs via in-game `mem` now that `battlestation.ts` is in the boot chain.
-
-**Commits**: `5906098` (1 commit this session; 3 earlier commits since the last close — `3e52eaf`, `e1c8cd1`, `2350cc7` — belong to a prior session that wasn't closed out, not to this one)
 
 ---
 
