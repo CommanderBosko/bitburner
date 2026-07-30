@@ -1,4 +1,5 @@
 import type { NS } from "../NetscriptDefinitions";
+import { runWithRetry } from "../lib/launch";
 import type { CrackCandidate, DarknetKnowledgeBase, DarknetServerEntry } from "../lib/types";
 import { DARKNET_REPORT_PORT, type DarknetReportMessage } from "../lib/darknet-ports";
 import {
@@ -347,6 +348,10 @@ function buildCrackBatch(kb: DarknetKnowledgeBase, entry: DarknetServerEntry): C
 	return bruteForceBatch(entry);
 }
 
+const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
+const LAUNCH_RETRY_ATTEMPTS = 5;
+const LAUNCH_RETRY_DELAY_MS = 3000;
+
 export async function main(ns: NS): Promise<void> {
 	ns.print("darknet-manager: starting");
 
@@ -357,10 +362,14 @@ export async function main(ns: NS): Promise<void> {
 	// can disappear mid-run even though it was purchased earlier - warn once rather than crash.
 	let warnedMissingNavigator = false;
 
-	// CHAIN-TAIL: this is currently the last script in the boot chain (scan-root.ts ->
-	// controller.ts -> hacknet-manager.ts -> ... -> this one). If new-background-loop
-	// scaffolds another script after this one, this marker moves there and a
-	// chain-launch block gets inserted here in its place.
+	// Chain-launch the next script in the bootstrap before continuing.
+	if (!ns.isRunning(GANG_MANAGER_SCRIPT, "home")) {
+		const nextPid = await runWithRetry(ns, GANG_MANAGER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (nextPid === 0) {
+			ns.tprint(`darknet-manager: failed to start ${GANG_MANAGER_SCRIPT} - check RAM/sync`);
+		}
+	}
+
 	while (true) {
 		cycle++;
 
