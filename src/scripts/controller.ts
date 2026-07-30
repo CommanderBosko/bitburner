@@ -51,15 +51,6 @@ const MIN_BATCH_PERIOD_MS = 4 * BATCH_GAP_MS;
 // naturally narrows the working set on a small fleet and widens it again as capacity grows -
 // without a hardcoded target-count cap.
 const MEANINGFUL_PREP_THREADS = 8;
-// Headroom for darknet-manager's own ns.exec dispatches, which this loop would otherwise starve
-// out by claiming all available home RAM every cycle. darknet-manager can fire up to 3
-// value + 2 recon dispatches per cycle (see VALUE/RECON_DISPATCH_PER_CYCLE), but reserving
-// for all of them at once (~29GB) would exceed home's total RAM outright - this only
-// guarantees at least one dispatch clears per cycle, sized to the heaviest single one:
-// darknet-agent-value.js at 6.80GB (3.75GB base ns.* cost per ram-audit + 3.05GB of
-// ns.dnet.connectToSession/getBlockedRam/memoryReallocation/openCache, verified via
-// ns-cost-lookup against NetscriptDefinitions.d.ts) with ~1.2GB margin.
-const DARKNET_RAM_RESERVE_GB = 8;
 
 function getCandidateTargets(ns: NS): ServerReport[] {
 	if (!ns.fileExists("/data/servers.json", "home")) return [];
@@ -124,12 +115,6 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 	}
 }
 
-// darknet-manager.js is only ever launched via backdoor-loop.ts, which rescan-loop.ts itself
-// gates behind LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB - so reserving its RAM before home clears
-// that threshold holds capacity open for a script that can't run yet, starving weaken/grow/hack
-// dispatch for nothing. Recomputed live (not captured once at startup) so the reserve kicks in
-// automatically once home-upgrade-loop.js grows home past the threshold, without needing a restart.
-//
 // home-upgrade-loop.js/server-purchase-manager.js get their own small reserve too - confirmed
 // in-game 2026-07-30: a working set that can only ever fund ONE cheap target (see
 // batchRamBudgetGb below) still re-claims literally 100% of home's free RAM every ~80ms via that
@@ -148,11 +133,10 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // prevent, just one level up. Cheap and rare enough (rescan-loop.js's base script cost, and only
 // while it isn't already running) that reserving it unconditionally every tick is negligible.
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
-	const darknetReserveGb = hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) ? DARKNET_RAM_RESERVE_GB : 0;
 	const rescanLoopReserveGb = ns.isRunning(RESCAN_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(RESCAN_LOOP_SCRIPT, "home");
 	const homeUpgradeLoopReserveGb = ns.isRunning(HOME_UPGRADE_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(HOME_UPGRADE_LOOP_SCRIPT, "home");
 	const serverPurchaseManagerReserveGb = ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home") ? 0 : ns.getScriptRam(SERVER_PURCHASE_MANAGER_SCRIPT, "home");
-	return darknetReserveGb + rescanLoopReserveGb + serverTreeReserveGb + homeUpgradeLoopReserveGb + serverPurchaseManagerReserveGb;
+	return rescanLoopReserveGb + serverTreeReserveGb + homeUpgradeLoopReserveGb + serverPurchaseManagerReserveGb;
 }
 
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
@@ -647,8 +631,8 @@ export async function main(ns: NS): Promise<void> {
 
 	// server-tree.js is deliberately NOT chain-launched (run it by hand when wanted), but its
 	// RAM still needs holding open so launching it later never has to wait on a batch to free up
-	// - queried live rather than hardcoded like DARKNET_RAM_RESERVE_GB, since this is one fixed
-	// script's own static cost rather than a variable multi-dispatch worst case.
+	// - queried live rather than hardcoded, since this is one fixed script's own static cost
+	// rather than a variable multi-dispatch worst case.
 	const serverTreeReserveGb = ns.getScriptRam(SERVER_TREE_SCRIPT, "home");
 	const scriptRamGb: ScriptRamGb = {
 		weaken: ns.getScriptRam(WEAKEN_SCRIPT, "home"),
