@@ -79,6 +79,11 @@ function applyCandidate(ns: NS, candidate: Candidate): boolean {
 }
 
 export async function main(ns: NS): Promise<void> {
+	// Every ns.* getter this loop calls (getServerMaxRam, getServerUpgradeCost, etc., once per
+	// owned server every LOOP_INTERVAL_MS) auto-logs its return value by default - with ~24 hosts
+	// that floods the tail buffer and can evict this script's own "purchased"/"upgraded" action
+	// lines before they're ever read. Same bug class controller.ts hit and fixed (c344ad9).
+	ns.disableLog("ALL");
 	ns.print("server-purchase-manager: starting");
 	let wasSaturated = false;
 

@@ -41,6 +41,16 @@ const BATCH_GAP_MS = 20;
 // computeBatchPlan's periodMs and dispatchTarget's comment for why timing, not RAM, is what
 // ultimately caps how many batches can usefully be in flight against one target at once.
 const MIN_BATCH_PERIOD_MS = 4 * BATCH_GAP_MS;
+// Floor on how much RAM a prep-phase candidate must be able to fund to earn a working-set slot
+// (see minFundableUnitRamGb) - confirmed live 2026-07-30: a 1-thread floor let buildWorkingSet
+// admit far more candidates than a small fleet could meaningfully serve at once (12 admitted
+// against a ~288GB fleet), each getting only 1-2 real threads funded per cycle - so slow that no
+// target ever finished prep, and hack.js never ran even once. Requiring several threads' worth
+// per admission (still capped at the candidate's own full cost, so a nearly-primed target isn't
+// excluded) makes buildWorkingSet debit a bigger, more realistic chunk per candidate, which
+// naturally narrows the working set on a small fleet and widens it again as capacity grows -
+// without a hardcoded target-count cap.
+const MEANINGFUL_PREP_THREADS = 8;
 // Headroom for darknet-manager's own ns.exec dispatches, which this loop would otherwise starve
 // out by claiming all available home RAM every cycle. darknet-manager can fire up to 3
 // value + 2 recon dispatches per cycle (see VALUE/RECON_DISPATCH_PER_CYCLE), but reserving
@@ -216,10 +226,16 @@ interface BatchPlan {
 // of order even with a bit of scheduler jitter.
 function computeBatchPlan(ns: NS, hostname: string): BatchPlan | null {
 	const maxMoney = ns.getServerMaxMoney(hostname);
-	if (maxMoney <= 0) return null;
+	if (maxMoney <= 0) {
+		ns.print(`computeBatchPlan(${hostname}): maxMoney <= 0, skipping`);
+		return null;
+	}
 
 	const weakenPerThread = ns.weakenAnalyze(1);
-	if (weakenPerThread <= 0) return null;
+	if (weakenPerThread <= 0) {
+		ns.print(`computeBatchPlan(${hostname}): weakenAnalyze(1) <= 0, skipping`);
+		return null;
+	}
 
 	const hackThreads = Math.max(1, Math.floor(ns.hackAnalyzeThreads(hostname, maxMoney * HACK_MONEY_FRACTION)));
 	const weaken1Threads = Math.max(1, Math.ceil(ns.hackAnalyzeSecurity(hackThreads, hostname) / weakenPerThread));
@@ -240,7 +256,14 @@ function computeBatchPlan(ns: NS, hostname: string): BatchPlan | null {
 	// close to weakenTime to fit the layout) - skip this cycle rather than launch a batch with an
 	// invalid negative delay; a future cycle (higher hacking level, or a re-scored target) will
 	// retry.
-	if (hackDelayMs < 0 || growDelayMs < 0) return null;
+	if (hackDelayMs < 0 || growDelayMs < 0) {
+		ns.print(
+			`computeBatchPlan(${hostname}): negative delay (hackDelayMs=${hackDelayMs.toFixed(0)}, ` +
+				`growDelayMs=${growDelayMs.toFixed(0)}, weakenTime=${weakenTime.toFixed(0)}, ` +
+				`growTime=${growTime.toFixed(0)}, hackTime=${hackTime.toFixed(0)}) - skipping this cycle`,
+		);
+		return null;
+	}
 
 	return {
 		hackThreads,
@@ -292,18 +315,24 @@ function estimateTargetDemandGb(ns: NS, hostname: string, scriptRamGb: ScriptRam
 	return batchRamGb(plan, scriptRamGb) * maxConcurrentBatches;
 }
 
-// The RAM cost of the smallest unit that actually guarantees this target real progress: one
-// funded thread for a prep target (partial prep dispatch is still useful), or one whole batch
-// for a primed target (dispatchBatch launches nothing at all unless every operation is fully
-// funded - see there for why). Used by buildWorkingSet as the bar a candidate must clear to be
-// admitted, rather than being admitted only to sit at zero every cycle until RAM frees up.
+// The RAM cost of the smallest unit that actually guarantees this target real, meaningful
+// progress: MEANINGFUL_PREP_THREADS threads for a prep target (or the plan's full cost if
+// smaller), or one whole batch for a primed target (dispatchBatch launches nothing at all unless
+// every operation is fully funded - see there for why). Used by buildWorkingSet as both the bar a
+// candidate must clear to be admitted and the amount debited from its simulated pool once
+// admitted - rather than being admitted only to sit at 1-2 real threads every cycle forever.
 function minFundableUnitRamGb(ns: NS, hostname: string, scriptRamGb: ScriptRamGb): number {
 	if (!isPrimed(ns, hostname)) {
 		const plan = computePrepPlan(ns, hostname);
 		const costs: number[] = [];
 		if (plan.weaken > 0) costs.push(scriptRamGb.weaken);
 		if (plan.grow > 0) costs.push(scriptRamGb.grow);
-		return costs.length === 0 ? Infinity : Math.min(...costs);
+		if (costs.length === 0) return Infinity;
+
+		// Bounded by the plan's own full cost so a target that's nearly done (needs only a
+		// handful of threads total) isn't excluded by a floor bigger than what it actually needs -
+		// see MEANINGFUL_PREP_THREADS for why a single-thread floor isn't enough on its own.
+		return Math.min(prepRamGb(plan, scriptRamGb), MEANINGFUL_PREP_THREADS * Math.min(...costs));
 	}
 
 	const plan = computeBatchPlan(ns, hostname);
