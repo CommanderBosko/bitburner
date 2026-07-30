@@ -527,6 +527,16 @@ export async function main(ns: NS): Promise<void> {
 		grow: ns.getScriptRam(GROW_SCRIPT, "home"),
 		hack: ns.getScriptRam(HACK_SCRIPT, "home"),
 	};
+	// rescan-loop.js and scan-root.js only ever relaunch each other - nothing else in the chain
+	// watches them, so if rescan-loop.js ever dies (observed in-game: it silently stopped and
+	// nothing brought it back), server-purchase-manager.js/home-ram-loop.js (both gated on it
+	// running) stay dead forever too, freezing the purchased-server fleet and home RAM in place
+	// indefinitely with no visible error. controller.js is the one script guaranteed to already be
+	// alive whenever this matters, so it's the natural watchdog. Delayed past one full
+	// RETARGET_INTERVAL_MS from boot so this can't refire the exact race the rescan-loop.js gate
+	// below was built to avoid (controller.js's first tick landing while scan-root.js is still
+	// mid-runWithRetry for its own first launch of rescan-loop.js).
+	const startTime = Date.now();
 	const syncedHosts = new Set<string>();
 	// Per-target dispatch schedule: hostname -> next Date.now() at which it's due for another
 	// weaken/grow/hack batch. A single-threaded scheduler, not concurrent loops - see the
@@ -615,6 +625,19 @@ export async function main(ns: NS): Promise<void> {
 			const next = now + waitMs;
 			nextDispatchAt.set(target.hostname, next);
 			earliestNext = Math.min(earliestNext, next);
+		}
+
+		// Watchdog: relaunch rescan-loop.js if it's ever found dead, so a one-off crash/kill
+		// doesn't silently freeze server-purchase-manager.js/home-ram-loop.js (and, transitively,
+		// backdoor-loop.js/company-work-loop.js/the darknet tail) forever - see the comment on
+		// startTime above for why this waits one RETARGET_INTERVAL_MS before ever firing.
+		if (Date.now() - startTime > RETARGET_INTERVAL_MS && !ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
+			const pid = ns.run(RESCAN_LOOP_SCRIPT);
+			ns.print(
+				pid !== 0
+					? `controller: rescan-loop.js was not running - relaunched it (pid ${pid})`
+					: `controller: rescan-loop.js not running and no RAM to relaunch it`,
+			);
 		}
 
 		// home-ram-loop.js is always allowed, ungated by the 64GB threshold below - it's the
