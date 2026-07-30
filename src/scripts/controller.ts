@@ -825,18 +825,22 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
-		// server-purchase-manager.js is also ungated by the 64GB threshold - buying/upgrading
-		// purchased servers directly grows the host pool dispatch itself draws from (see
-		// getHostPool), so it feeds hacking rather than competing with it for a separate resource.
-		// But its first launch attempt used to race scan-root.js's own boot-time launch of
-		// rescan-loop.js: controller.js starts running (and hits this block on its very first
-		// tick) while scan-root.js is still resident and mid-runWithRetry for rescan-loop.js, and
-		// 6.25GB of extra demand landing in that narrow window was enough to starve rescan-loop.js
-		// out (confirmed in-game: "scan-root: failed to start scripts/rescan-loop.js"). Gating this
-		// specific launch on rescan-loop.js already being up sidesteps the race entirely - by the
-		// time that's true, scan-root.js's main() is already returning (launching rescan-loop.js
-		// is its last action), so there's no meaningful contention window left.
-		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home") && !ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home")) {
+		// server-purchase-manager.js's first launch attempt used to race scan-root.js's own
+		// boot-time launch of rescan-loop.js: controller.js starts running (and hits this block on
+		// its very first tick) while scan-root.js is still resident and mid-runWithRetry for
+		// rescan-loop.js, and 6.25GB of extra demand landing in that narrow window was enough to
+		// starve rescan-loop.js out (confirmed in-game: "scan-root: failed to start
+		// scripts/rescan-loop.js"). Gating this specific launch on rescan-loop.js already being up
+		// sidesteps the race entirely - by the time that's true, scan-root.js's main() is already
+		// returning (launching rescan-loop.js is its last action), so there's no meaningful
+		// contention window left. Also gated behind the same 64GB threshold as
+		// hacknet-manager.js/battlestation.js below - purchased-server income is weak enough early
+		// game that it shouldn't compete with scan-loop/controller/weaken-grow-hack for RAM either.
+		if (
+			ns.isRunning(RESCAN_LOOP_SCRIPT, "home") &&
+			hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) &&
+			!ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home")
+		) {
 			const pid = ns.run(SERVER_PURCHASE_MANAGER_SCRIPT);
 			if (pid === 0) {
 				ns.print(`controller: still waiting for RAM to start ${SERVER_PURCHASE_MANAGER_SCRIPT}`);

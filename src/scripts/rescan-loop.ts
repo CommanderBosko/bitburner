@@ -9,6 +9,7 @@ const LAUNCH_RETRY_DELAY_MS = 3000;
 
 const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";
 const COMPANY_WORK_LOOP_SCRIPT = "scripts/company-work-loop.js";
+const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
 
 export async function main(ns: NS): Promise<void> {
 	while (true) {
@@ -16,7 +17,7 @@ export async function main(ns: NS): Promise<void> {
 		// they can't compete with scan-loop/controller/weaken-grow-hack for RAM while home is
 		// this tight. Non-blocking ns.run(), re-checked every rescan cycle until each succeeds.
 		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
-			for (const lowerPriorityScript of [COMPANY_WORK_LOOP_SCRIPT, BACKDOOR_LOOP_SCRIPT]) {
+			for (const lowerPriorityScript of [COMPANY_WORK_LOOP_SCRIPT, GANG_MANAGER_SCRIPT, BACKDOOR_LOOP_SCRIPT]) {
 				if (ns.isRunning(lowerPriorityScript, "home")) continue;
 				const pid = ns.run(lowerPriorityScript);
 				if (pid === 0) {
