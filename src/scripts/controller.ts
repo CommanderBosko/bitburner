@@ -8,7 +8,7 @@ const HACK_SCRIPT = "scripts/hack.js";
 const WORKER_SCRIPTS = [WEAKEN_SCRIPT, GROW_SCRIPT, HACK_SCRIPT];
 const HACKNET_MANAGER_SCRIPT = "scripts/hacknet-manager.js";
 const HOME_UPGRADE_LOOP_SCRIPT = "scripts/home-upgrade-loop.js";
-const BATTLESTATION_SCRIPT = "scripts/battlestation.js";
+const DARKNET_MANAGER_SCRIPT = "scripts/darknet-manager.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
@@ -129,7 +129,7 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // protection: it only fires if rescan-loop.js has died, but without a reserve, dispatch could
 // have already claimed 100% of free RAM by the time that check runs, starving the one relaunch
 // that's supposed to unfreeze home-upgrade-loop.js/server-purchase-manager.js/backdoor-loop.js/
-// the whole darknet+gang tail behind it - the same failure mode those two reserves exist to
+// the whole gang tail behind it - the same failure mode those two reserves exist to
 // prevent, just one level up. Cheap and rare enough (rescan-loop.js's base script cost, and only
 // while it isn't already running) that reserving it unconditionally every tick is negligible.
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
@@ -625,7 +625,7 @@ export async function main(ns: NS): Promise<void> {
 
 	// scan-loop (scan-root.js/rescan-loop.js), controller.js (this script), and the
 	// weaken/grow/hack dispatch below are the three must-run priorities. Every other manager
-	// (home-upgrade-loop.js, hacknet-manager.js, battlestation.js, server-purchase-manager.js) is
+	// (home-upgrade-loop.js, hacknet-manager.js, darknet-manager.js, server-purchase-manager.js) is
 	// launched only from inside the dispatch loop, after each tick's dispatch has already
 	// claimed its RAM - see the loop below - so none of them can starve actual hacking.
 
@@ -798,7 +798,7 @@ export async function main(ns: NS): Promise<void> {
 
 		// Watchdog: relaunch rescan-loop.js if it's ever found dead, so a one-off crash/kill
 		// doesn't silently freeze server-purchase-manager.js/home-upgrade-loop.js (and, transitively,
-		// backdoor-loop.js/company-work-loop.js/the darknet tail) forever - see the comment on
+		// backdoor-loop.js/company-work-loop.js) forever - see the comment on
 		// startTime above for why this waits one RETARGET_INTERVAL_MS before ever firing.
 		if (Date.now() - startTime > RETARGET_INTERVAL_MS && !ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
 			const pid = ns.run(RESCAN_LOOP_SCRIPT);
@@ -834,7 +834,7 @@ export async function main(ns: NS): Promise<void> {
 		// sidesteps the race entirely - by the time that's true, scan-root.js's main() is already
 		// returning (launching rescan-loop.js is its last action), so there's no meaningful
 		// contention window left. Also gated behind the same 64GB threshold as
-		// hacknet-manager.js/battlestation.js below - purchased-server income is weak enough early
+		// hacknet-manager.js/darknet-manager.js below - purchased-server income is weak enough early
 		// game that it shouldn't compete with scan-loop/controller/weaken-grow-hack for RAM either.
 		if (
 			ns.isRunning(RESCAN_LOOP_SCRIPT, "home") &&
@@ -847,11 +847,11 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
-		// hacknet-manager.js/battlestation.js still wait for home RAM to clear the threshold
+		// hacknet-manager.js/darknet-manager.js still wait for home RAM to clear the threshold
 		// before even attempting to launch, so they can never compete with scan-loop/controller/
 		// weaken-grow-hack (or server-purchase-manager.js) for RAM while home is this tight.
 		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
-			for (const lowerPriorityScript of [HACKNET_MANAGER_SCRIPT, BATTLESTATION_SCRIPT]) {
+			for (const lowerPriorityScript of [HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
 				if (ns.isRunning(lowerPriorityScript, "home")) continue;
 				const pid = ns.run(lowerPriorityScript);
 				if (pid === 0) {

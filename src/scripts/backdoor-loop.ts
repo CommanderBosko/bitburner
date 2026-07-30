@@ -1,16 +1,11 @@
 import type { NS } from "../NetscriptDefinitions";
 import type { ServerReport } from "../lib/types";
 import { buildParentMap, pathTo } from "../lib/network";
-import { hasEnoughHomeRam, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB, runWithRetry } from "../lib/launch";
 
 const BACKDOOR_LOOP_INTERVAL_MS = 60000;
 // singularity.installBackdoor/connect throw if Source-File 4 isn't owned (outside BitNode 4).
 // Back off far longer than the normal loop interval so a missing SF4 doesn't spam retries.
 const SINGULARITY_UNAVAILABLE_RETRY_MS = 300000;
-
-const DARKNET_MANAGER_SCRIPT = "scripts/darknet-manager.js";
-const LAUNCH_RETRY_ATTEMPTS = 5;
-const LAUNCH_RETRY_DELAY_MS = 3000;
 
 function getRootedHosts(ns: NS): string[] {
 	if (!ns.fileExists("/data/servers.json", "home")) return [];
@@ -36,17 +31,6 @@ export async function main(ns: NS): Promise<void> {
 	ns.print("backdoor-loop: starting");
 
 	while (true) {
-		// Chain-launch the next script in the bootstrap once home RAM clears the lower-priority
-		// threshold - same gate as company-work-loop.js/gang-manager.js above this in rescan-loop.ts,
-		// re-checked every cycle (rather than once at boot) so a tight-RAM moment at launch doesn't
-		// permanently strand darknet-manager.js unlaunched.
-		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) && !ns.isRunning(DARKNET_MANAGER_SCRIPT, "home")) {
-			const nextPid = await runWithRetry(ns, DARKNET_MANAGER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-			if (nextPid === 0) {
-				ns.tprint(`backdoor-loop: failed to start ${DARKNET_MANAGER_SCRIPT} - check RAM/sync`);
-			}
-		}
-
 		const hosts = getRootedHosts(ns);
 		const parents = buildParentMap(ns);
 		let singularityUnavailable = false;
