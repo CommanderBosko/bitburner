@@ -1,3 +1,31 @@
+## Session: 2026-07-30 (later) — Root-caused a fourth $0-income cause: buildWorkingSet diluting the fleet across too many prep targets at once
+
+**Focus**: User reported still-flat $0.000/sec production 20+ minutes after the same-day `7c666e0` watchdog reboot; live-diagnose rather than assume it was just still warming up, given this project's track record of three prior distinct causes of the identical symptom.
+
+### What changed (and why)
+- Asked for decisive evidence in stages rather than guessing from a screenshot: a `controller.js` tail log, then two `analyze` checks on `phantasy` a few minutes apart. Security came back exactly flat (7.000 → 7.000) while money crept up passively — decisive, since security is inert without a script actually landing (unlike money, which drifts toward max on its own), proving zero real dispatch was landing on that target.
+- Added two diagnostics on hypothesis before concluding anything: `ns.disableLog("ALL")` in `server-purchase-manager.ts` (never called, unlike `controller.ts` post-`c344ad9` — same auto-log-spam class, possibly hiding its own purchase/upgrade lines) and an `ns.print` for `computeBatchPlan`'s two silent-`null` return paths in `controller.ts` (suspected a batch-timing guard silently blocking an already-primed `phantasy`). Rebuilt, had the user restart and re-paste logs — neither diagnostic fired, ruling out that hypothesis.
+- That restart's log revealed the real shape instead: 7 of 12 admitted working-set targets were completely starved (`foodnstuff` wanting 5,687 grow threads, `sigma-cosmetics` 1,658, etc.), pool pinned at ~24GB free across many ticks. A search for `hack.js` in Active Scripts came back empty — it had never run once.
+- Root cause: `buildWorkingSet`'s admission bar (`minFundableUnitRamGb`, from the earlier `c344ad9` fix) only required a prep candidate fund **one thread** to hold a working-set slot. Against a ~288GB fleet, that let 12 targets in at once, each getting only 1-2 real threads per cycle - `phantasy` got 2 weaken threads, clearing ~0.1 security per ~2-minute cycle against ~6 points of excess. No target could ever reach "primed," so `hack.js` never launched.
+- Fixed by raising the prep-phase admission/debit bar to `MEANINGFUL_PREP_THREADS = 8` threads' worth (capped at the candidate's own remaining cost) - self-scaling: narrows the working set on a small fleet, widens again as the fleet grows, no hardcoded target-count constant.
+
+### Decisions
+- Chose the capacity-scaling admission-bar fix over a hardcoded working-set-size cap or a stall-based backoff, via `AskUserQuestion` - self-scaling behavior over a magic constant that would need re-tuning as the fleet grows.
+- Kept both diagnostics (`ns.disableLog` in `server-purchase-manager.ts`, the `computeBatchPlan` null-path prints) even though neither turned out to be the actual bug - cheap, and they instantly rule out two plausible-but-wrong hypotheses if this symptom class recurs.
+
+### Issues / surprises
+- This is the **fourth** distinct real root cause of the same "$0 scripted income" symptom on this fresh BN4 save, each one only visible once the prior fix removed the thing masking it: `buildWorkingSet`'s debit-by-`needed`/`break` bug (`c344ad9`) → pserver RAM fragmentation (`f2ccfc8`) → `rescan-loop.js` dying silently (`7c666e0`) → now `buildWorkingSet`'s 1-thread admission bar diluting the fleet too thin. Worth remembering going into next session: "still $0" after a fix is not evidence the fix was wrong, just that there may be another independent cause stacked underneath.
+- The fix is **not yet confirmed live** - the user restarted `scan-root.js` with the build synced but had to leave before checking results.
+
+### Next session
+- Highest priority: confirm `hack.js` finally appears in Active Scripts and `Total production`/`profit-watch.ts` moves off $0.000/sec. Check working-set size and per-target thread counts too.
+- If still flat, treat as a fifth cause to find, not more waiting.
+- See `project-state.md` for the full current-state writeup.
+
+**Commits**: `20a2872` (1 commit)
+
+---
+
 ## Session: 2026-07-30 — Root-caused why the pserver-fragmentation fix never ran: rescan-loop.js had died with nothing watching it
 
 _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
@@ -106,36 +134,6 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - Still pending from the prior close: verify the `7494d0e` RAM-priority gating fix and `company-work-loop.ts` in-game.
 
 **Commits**: `75c5bb7` (1 commit)
-
----
-
-## Session: 2026-07-26 — BitNode 1→4 reset, first singularity automation, RAM-priority gating fix
-
-**Focus**: Doc close-out for a prior unclosed session's work: the save completed BitNode 1 and reset into BitNode 4 (unlocking `ns.singularity.*` natively), which the user used to scope and build the first two BN4 automation loops, then hit and fixed a real RAM-starvation bug in dispatch. This close-out session itself made no code changes — the transcript for this conversation contains only the `/session-closer` invocation.
-
-### What changed (and why)
-- **BitNode 1 was completed and the save reset into BitNode 4** — confirmed via `singularity-roadmap.md`'s save-state note ("fresh into BN4," hacking 15, $400, 32GB home RAM). This flips the standing "don't scope `ns.singularity.*` scripts" guidance that held throughout the BN1 grind: inside BN4, Singularity works without Source-File 4.
-- Ran `/interview` + `/research` to rank BN4 automation build order rather than guessing: `singularity-roadmap.md` (dependency graph — company work → home RAM/Core upgrades → faction work → augment purchasing) and `jobs.md` (hacking-XP/money source rankings, pulled directly from `bitburner-src`'s own source since the official docs' companies page is an unfilled stub).
-- Built `company-work-loop.ts` (Tier 1, applies/works the best available Software-track job across every megacorp) and `home-ram-loop.ts` (Tier 2, calls `ns.singularity.upgradeHomeRam()` on a poll loop) — the first two items off the roadmap.
-- Hit a real starvation bug on the fresh, small BN4 home server: weaken/grow/hack dispatch kept losing the RAM race to resident managers that all launched unconditionally at boot. Fixed by gating every non-essential manager (`hacknet-manager.ts`, `battlestation.ts`, `server-purchase-manager.ts`) behind a new `hasEnoughHomeRam(ns, 64)` check, re-tested every loop tick; only `scan-root.ts`/`rescan-loop.ts`/`controller.ts`/dispatch/`home-ram-loop.ts` run unconditionally now.
-
-### Decisions
-- Chose a re-tested-every-tick, non-blocking `ns.run()` gate over a dedicated "wait until unblocked" poller script — managers start automatically the instant RAM allows, with no extra resident process.
-- `home-ram-loop.ts` is exempt from its own gate (it's the fix for the ceiling, not a competitor for it) and launches from inside `controller.ts`'s dispatch loop, after each tick's dispatch has already claimed RAM.
-- `company-work-loop.ts` built first among the roadmap's tiers since it has no prerequisites and its income funds every downstream item (home RAM, faction work, augment purchases).
-
-### Issues / surprises
-- This close-out session did no code work itself — all three commits closed here were made in a prior session that ended without running `/session-closer`. Rationale above is transcribed from commit messages and source diffs, not a live conversation transcript.
-- The BN1→4 reset invalidates every previously-`mem`-verified RAM figure in `project-state.md` (fresh home server) — nothing has been re-verified yet.
-- `company-work-loop.ts` and `backdoor-loop.ts` turned out to be gated via `rescan-loop.ts` (not `controller.ts`) — and since `backdoor-loop.ts` unconditionally launches `darknet-manager.ts` once it starts, the entire darknet automation tail now transitively waits on the same 64GB threshold too, a real behavior change from before this fix.
-
-### Next session
-- Verify the RAM-priority gating fix in-game (dispatch gets RAM first, `home-ram-loop.ts` climbs max RAM, gated managers launch once past 64GB).
-- Verify `company-work-loop.ts` gets hired and accrues rep/salary in-game; establish RAM costs for both new scripts.
-- Re-`mem`-verify the whole chain now that the reset invalidated prior figures.
-- Continue `singularity-roadmap.md`'s Tier 2+ (faction work loop, then the previously-shelved augmentation-purchasing brief).
-
-**Commits**: `d9e8a89`..`7494d0e` (3 commits)
 
 ---
 
