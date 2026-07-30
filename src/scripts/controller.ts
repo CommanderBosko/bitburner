@@ -139,11 +139,20 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // growth) that would eventually make bigger targets affordable. Reserved only while NOT already
 // running (once resident, their cost is already reflected in ns.getServerUsedRam, so reserving
 // again would double-count and permanently waste that RAM).
+//
+// rescan-loop.js's own watchdog relaunch (see main()'s "Watchdog" block) needs the identical
+// protection: it only fires if rescan-loop.js has died, but without a reserve, dispatch could
+// have already claimed 100% of free RAM by the time that check runs, starving the one relaunch
+// that's supposed to unfreeze home-upgrade-loop.js/server-purchase-manager.js/backdoor-loop.js/
+// the whole darknet+gang tail behind it - the same failure mode those two reserves exist to
+// prevent, just one level up. Cheap and rare enough (rescan-loop.js's base script cost, and only
+// while it isn't already running) that reserving it unconditionally every tick is negligible.
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const darknetReserveGb = hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) ? DARKNET_RAM_RESERVE_GB : 0;
+	const rescanLoopReserveGb = ns.isRunning(RESCAN_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(RESCAN_LOOP_SCRIPT, "home");
 	const homeUpgradeLoopReserveGb = ns.isRunning(HOME_UPGRADE_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(HOME_UPGRADE_LOOP_SCRIPT, "home");
 	const serverPurchaseManagerReserveGb = ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home") ? 0 : ns.getScriptRam(SERVER_PURCHASE_MANAGER_SCRIPT, "home");
-	return darknetReserveGb + serverTreeReserveGb + homeUpgradeLoopReserveGb + serverPurchaseManagerReserveGb;
+	return darknetReserveGb + rescanLoopReserveGb + serverTreeReserveGb + homeUpgradeLoopReserveGb + serverPurchaseManagerReserveGb;
 }
 
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
