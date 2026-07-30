@@ -86,23 +86,61 @@ function pickTrainTask(tasks: GangTask[], isHacking: boolean): string | undefine
 	)?.name;
 }
 
-function pickEarnTask(tasks: GangTask[], isHacking: boolean, wantRespect: boolean): string | undefined {
+// Mirrors calculateMoneyGain/calculateRespectGain from the game's own
+// src/Gang/formulas/formulas.ts: gain = (K * baseGain * statWeight * territoryMult *
+// respectMult) ^ territoryPenalty, where statWeight is the task's stat-weighted sum of the
+// member's actual stats minus a difficulty threshold (member is below the threshold -> 0
+// gain regardless of nominal payout). territoryPenalty and respectMult are the same for
+// every task compared here (they depend on gang state, not the task), and K is the same
+// within a money-vs-respect branch, so all three are constant multipliers/exponents that
+// don't change which task scores highest - they're dropped so this doesn't need
+// currentNodeMults.GangSoftcap (only readable via Formulas.exe/SF5).
+function earnScore(member: GangMember, task: GangTask, territory: number, wantRespect: boolean): number {
+	const difficultyFactor = wantRespect ? 4 : 3.2;
+	const statWeight =
+		(task.hackWeight / 100) * member.hack +
+		(task.strWeight / 100) * member.str +
+		(task.defWeight / 100) * member.def +
+		(task.dexWeight / 100) * member.dex +
+		(task.agiWeight / 100) * member.agi +
+		(task.chaWeight / 100) * member.cha -
+		difficultyFactor * task.difficulty;
+	if (statWeight <= 0) return 0;
+
+	const territoryExp = wantRespect ? task.territory.respect : task.territory.money;
+	const territoryMult = Math.max(0.005, Math.pow(territory * 100, territoryExp) / 100);
+	if (!Number.isFinite(territoryMult) || territoryMult <= 0) return 0;
+
+	return statWeight * territoryMult;
+}
+
+function pickEarnTask(
+	member: GangMember,
+	tasks: GangTask[],
+	isHacking: boolean,
+	wantRespect: boolean,
+	territory: number,
+): string | undefined {
 	const typeMatched = tasks.filter((t) => (isHacking ? t.isHacking : t.isCombat));
 	const pool = typeMatched.length > 0 ? typeMatched : tasks;
 
-	const scored = pool
-		.filter((t) => (wantRespect ? t.baseRespect > 0 : t.baseMoney > 0))
-		.sort((a, b) => (wantRespect ? b.baseRespect - a.baseRespect : b.baseMoney - a.baseMoney));
+	const eligible = pool.filter((t) => (wantRespect ? t.baseRespect > 0 : t.baseMoney > 0));
+	const candidates = eligible.length > 0 ? eligible : pool;
 
-	const chosen = scored[0] === undefined ? pool[0] : scored[0];
-	return chosen === undefined ? undefined : chosen.name;
+	const scored = candidates
+		.map((t) => ({ task: t, score: earnScore(member, t, territory, wantRespect) }))
+		.sort((a, b) => b.score - a.score);
+
+	return scored[0]?.task.name;
 }
 
 function assignTask(ns: NS, member: GangMember, isHacking: boolean, tasks: GangTask[], info: GangInfo): void {
 	const wantRespect = info.respect < info.respectForNextRecruit;
 	const stillTraining = primaryAscMult(member, isHacking) < EARN_ASC_MULT_TARGET;
 
-	const target = (stillTraining && pickTrainTask(tasks, isHacking)) || pickEarnTask(tasks, isHacking, wantRespect);
+	const target =
+		(stillTraining && pickTrainTask(tasks, isHacking)) ||
+		pickEarnTask(member, tasks, isHacking, wantRespect, info.territory);
 	if (target && member.task !== target) {
 		ns.gang.setMemberTask(member.name, target);
 	}
