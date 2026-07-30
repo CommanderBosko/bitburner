@@ -119,9 +119,7 @@ export async function main(ns: NS): Promise<void> {
 			const best = affordable[0];
 			if (applyCandidate(ns, best)) {
 				const label = best.kind === "buy" ? "purchased new server" : `upgraded ${best.hostname}`;
-				// tprint persists in the terminal; print-only fades from the tail after a
-				// few seconds and is easy to miss for a one-shot purchase event.
-				ns.tprint(`server-purchase-manager: ${label} to ${best.targetRam}GB for $${Math.round(best.cost).toLocaleString()}`);
+				ns.print(`server-purchase-manager: ${label} to ${best.targetRam}GB for $${Math.round(best.cost).toLocaleString()}`);
 			}
 		}
 
