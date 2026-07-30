@@ -129,9 +129,21 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // that threshold holds capacity open for a script that can't run yet, starving weaken/grow/hack
 // dispatch for nothing. Recomputed live (not captured once at startup) so the reserve kicks in
 // automatically once home-upgrade-loop.js grows home past the threshold, without needing a restart.
+//
+// home-upgrade-loop.js/server-purchase-manager.js get their own small reserve too - confirmed
+// in-game 2026-07-30: a working set that can only ever fund ONE cheap target (see
+// batchRamBudgetGb below) still re-claims literally 100% of home's free RAM every ~80ms via that
+// target's own batch cadence, so the "launched only after dispatch has already claimed its RAM"
+// ordering in main() left these two managers stuck on "still waiting for RAM to start"
+// indefinitely - freezing the exact fleet-growth mechanisms (pserver buying/upgrading, home RAM
+// growth) that would eventually make bigger targets affordable. Reserved only while NOT already
+// running (once resident, their cost is already reflected in ns.getServerUsedRam, so reserving
+// again would double-count and permanently waste that RAM).
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const darknetReserveGb = hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) ? DARKNET_RAM_RESERVE_GB : 0;
-	return darknetReserveGb + serverTreeReserveGb;
+	const homeUpgradeLoopReserveGb = ns.isRunning(HOME_UPGRADE_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(HOME_UPGRADE_LOOP_SCRIPT, "home");
+	const serverPurchaseManagerReserveGb = ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home") ? 0 : ns.getScriptRam(SERVER_PURCHASE_MANAGER_SCRIPT, "home");
+	return darknetReserveGb + serverTreeReserveGb + homeUpgradeLoopReserveGb + serverPurchaseManagerReserveGb;
 }
 
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
@@ -142,6 +154,23 @@ function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<str
 		freeRam.set(host, Math.max(0, free));
 	}
 	return freeRam;
+}
+
+// Real per-host thread allocation always strands a fraction of a GB on any host whose size isn't
+// a clean multiple of a script's per-thread cost (e.g. an 8GB host fits only 4 whole 1.75GB
+// weaken/grow threads, stranding 1GB that no single thread can use) - confirmed in-game
+// 2026-07-30: with ~24 mostly-small (8-16GB) purchased-server tiers, that per-host stranding
+// summed to ~15-20GB, enough to let buildWorkingSet admit a target whose real fundable capacity
+// (after per-host rounding) fell short of its own coarse whole-pool-total estimate, which has no
+// visibility into per-host rounding at all. Reserving one thread's worth of slop per host (the
+// worst case any single host can strand) keeps admission/budget decisions from promising RAM the
+// real per-host allocator can't actually deliver - self-scaling with fleet size and thread cost,
+// not a hardcoded constant. Only used for planning-level aggregate estimates (buildWorkingSet's
+// admission math, the batch fair-share budget) - the real freeRam map used for actual dispatch
+// stays exact, since planHostAllocation already handles per-host truncation correctly on its own.
+function fragmentationSlopGb(hosts: string[], scriptRamGb: ScriptRamGb): number {
+	const maxThreadCostGb = Math.max(scriptRamGb.weaken, scriptRamGb.grow, scriptRamGb.hack);
+	return hosts.length * maxThreadCostGb;
 }
 
 // Total RAM the host pool actually has (net of home's fixed reserve), as opposed to
@@ -353,7 +382,10 @@ function buildWorkingSet(ns: NS, candidates: ServerReport[], totalFreeRamGb: num
 
 	for (const candidate of candidates) {
 		const needed = estimateTargetDemandGb(ns, candidate.hostname, scriptRamGb);
-		if (needed <= 0) continue;
+		if (needed <= 0) {
+			ns.print(`buildWorkingSet(${candidate.hostname}): needed<=0 (primed with invalid/zero batch plan?) - skipping`);
+			continue;
+		}
 
 		const minUnit = minFundableUnitRamGb(ns, candidate.hostname, scriptRamGb);
 		// `candidates` is sorted by score (maxMoney / minSecurity), not by RAM cost, so an
@@ -362,7 +394,13 @@ function buildWorkingSet(ns: NS, candidates: ServerReport[], totalFreeRamGb: num
 		// above several trivially-cheap targets (a handful of threads each) further down the same
 		// list. `continue` past it instead of `break`-ing the whole loop, so those still get a
 		// chance.
-		if (workingSet.length > 0 && poolRemaining < minUnit) continue;
+		if (workingSet.length > 0 && poolRemaining < minUnit) {
+			ns.print(
+				`buildWorkingSet(${candidate.hostname}): rejected - needed ${needed.toFixed(2)}GB, minUnit ` +
+					`${minUnit.toFixed(2)}GB > poolRemaining ${poolRemaining.toFixed(2)}GB`,
+			);
+			continue;
+		}
 
 		workingSet.push(candidate);
 		// A candidate that can't fund even one unit (one batch, or one weaken/grow thread)
@@ -382,6 +420,9 @@ function buildWorkingSet(ns: NS, candidates: ServerReport[], totalFreeRamGb: num
 		// or one whole batch) so it can't overshoot the way `needed` does.
 		if (poolRemaining >= minUnit) {
 			poolRemaining = Math.max(0, poolRemaining - minUnit);
+			ns.print(`buildWorkingSet(${candidate.hostname}): admitted, funded - minUnit ${minUnit.toFixed(2)}GB, poolRemaining now ${poolRemaining.toFixed(2)}GB`);
+		} else {
+			ns.print(`buildWorkingSet(${candidate.hostname}): admitted, but minUnit ${minUnit.toFixed(2)}GB unfundable (poolRemaining ${poolRemaining.toFixed(2)}GB) - pool untouched`);
 		}
 	}
 
@@ -454,14 +495,30 @@ function dispatch(ns: NS, script: string, desiredThreads: number, target: string
 // first and only commits (mutating the real freeRam and calling ns.exec) if all four fit.
 function dispatchBatch(ns: NS, hostname: string, hosts: string[], freeRam: Map<string, number>, plan: BatchPlan): boolean {
 	const ops = [
-		{ script: WEAKEN_SCRIPT, threads: plan.weaken1Threads },
-		{ script: HACK_SCRIPT, threads: plan.hackThreads },
-		{ script: GROW_SCRIPT, threads: plan.growThreads },
-		{ script: WEAKEN_SCRIPT, threads: plan.weaken2Threads },
+		{ script: WEAKEN_SCRIPT, threads: plan.weaken1Threads, delayMs: plan.weaken1DelayMs },
+		{ script: HACK_SCRIPT, threads: plan.hackThreads, delayMs: plan.hackDelayMs },
+		{ script: GROW_SCRIPT, threads: plan.growThreads, delayMs: plan.growDelayMs },
+		{ script: WEAKEN_SCRIPT, threads: plan.weaken2Threads, delayMs: plan.weaken2DelayMs },
 	];
+	// Both the fundability check AND the commit below process ops largest-thread-count-first,
+	// not the weaken1/hack/grow/weaken2 declaration order above (each op's own delayMs still
+	// carries its correct HWGW landing time regardless of dispatch order, so this doesn't affect
+	// timing) - confirmed in-game 2026-07-30: with the fleet still mostly small (8-16GB)
+	// purchased-server tiers, checking/committing in a fixed order let earlier, smaller ops claim
+	// whole hosts first from the front of `hosts` and leave only fragmented sub-1-thread
+	// remainders scattered across many hosts for whichever op happened to need the most threads
+	// (grow, in the observed case: 65 threads needed, only 60 fundable, 22GB nominally free but
+	// not in any single host's contiguous leftover) - even though the pool's raw GB total was
+	// nominally enough for all four ops combined. Standard first-fit-decreasing bin-packing fix:
+	// let the largest requirement claim whole hosts while the pool is least fragmented, then let
+	// smaller requirements (far more flexible about fitting into odd leftover chunks) go after.
+	// Both passes MUST use the identical order - checking in one order but committing in another
+	// would let the dry run pass while the real commit fails differently, risking exactly the
+	// partial-batch outcome this whole dry-run-first design exists to prevent.
+	const packOrder = [...ops].sort((a, b) => b.threads - a.threads);
 
 	const scratch = new Map(freeRam);
-	for (const op of ops) {
+	for (const op of packOrder) {
 		const funded = allocatedThreads(planHostAllocation(ns, op.script, op.threads, hosts, scratch));
 		if (funded < op.threads) {
 			let poolGb = 0;
@@ -474,10 +531,9 @@ function dispatchBatch(ns: NS, hostname: string, hosts: string[], freeRam: Map<s
 		}
 	}
 
-	commitAllocation(ns, WEAKEN_SCRIPT, hostname, plan.weaken1DelayMs, planHostAllocation(ns, WEAKEN_SCRIPT, plan.weaken1Threads, hosts, freeRam));
-	commitAllocation(ns, HACK_SCRIPT, hostname, plan.hackDelayMs, planHostAllocation(ns, HACK_SCRIPT, plan.hackThreads, hosts, freeRam));
-	commitAllocation(ns, GROW_SCRIPT, hostname, plan.growDelayMs, planHostAllocation(ns, GROW_SCRIPT, plan.growThreads, hosts, freeRam));
-	commitAllocation(ns, WEAKEN_SCRIPT, hostname, plan.weaken2DelayMs, planHostAllocation(ns, WEAKEN_SCRIPT, plan.weaken2Threads, hosts, freeRam));
+	for (const op of packOrder) {
+		commitAllocation(ns, op.script, hostname, op.delayMs, planHostAllocation(ns, op.script, op.threads, hosts, freeRam));
+	}
 	return true;
 }
 
@@ -494,10 +550,30 @@ function dispatchBatch(ns: NS, hostname: string, hosts: string[], freeRam: Map<s
 // batch's landings gets filled by others.
 //
 // growThreadCap bounds only the prep branch's grow request (see main()'s fair-share comment for
-// why) - batching is left uncapped here since a single HWGW batch is already sized off
-// HACK_MONEY_FRACTION of the target's own maxMoney, not an unbounded regrow-from-scratch demand,
-// so it was never the source of one target claiming the entire pool in one dispatch call.
-function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<string, number>, growThreadCap: number): number {
+// why); batchRamBudgetGb bounds the primed/batch branch the same way, for a different reason -
+// confirmed in-game 2026-07-30: a single already-primed target that's the ONLY fundable candidate
+// in the working set (its own batch cost fits the pool, every other candidate's doesn't) will
+// re-claim 100% of whatever RAM frees up every ~80ms via computeBatchPlan's periodMs cadence,
+// forever - there's no upper bound on how many concurrent batches one target can hold, since
+// estimateTargetDemandGb's own ceiling is deliberately "as many as timing allows, regardless of
+// RAM" (RAM scarcity is supposed to be handled by dispatchBatch declining what it can't fund, not
+// by this). That's fine when multiple targets/managers are competing for genuinely scarce RAM
+// each tick, but with only one fundable target it means that target alone permanently starves
+// every other admitted-but-larger target AND (before the reserve added to currentReserveGb) the
+// fleet-growth managers, since dispatch always gets first claim on freeRam each tick. Declining to
+// even attempt a batch whose full cost exceeds this target's fair share (recomputed fresh each
+// tick from live planningFreeRamGb / workingSet.length, not a hardcoded constant) leaves the rest of
+// the pool visibly free for other working-set members and the tick's later manager-launch checks,
+// self-correcting as the fleet grows or the working set changes width.
+function dispatchTarget(
+	ns: NS,
+	hostname: string,
+	hosts: string[],
+	freeRam: Map<string, number>,
+	growThreadCap: number,
+	scriptRamGb: ScriptRamGb,
+	batchRamBudgetGb: number,
+): number {
 	if (!isPrimed(ns, hostname)) {
 		const desiredGrowThreads = Math.min(computeGrowThreads(ns, hostname), growThreadCap);
 		// Weaken must only counter security that will actually be added this tick, not the full
@@ -533,6 +609,15 @@ function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<
 
 	const plan = computeBatchPlan(ns, hostname);
 	if (!plan) return NO_RAM_RETRY_MS;
+
+	const planRamGb = batchRamGb(plan, scriptRamGb);
+	if (planRamGb > batchRamBudgetGb) {
+		ns.print(
+			`dispatchTarget(${hostname}) batch: plan needs ${planRamGb.toFixed(2)}GB, over this tick's ` +
+				`${batchRamBudgetGb.toFixed(2)}GB fair-share budget - skipping so other targets/managers get a turn`,
+		);
+		return NO_RAM_RETRY_MS;
+	}
 
 	return dispatchBatch(ns, hostname, hosts, freeRam, plan) ? plan.periodMs : NO_RAM_RETRY_MS;
 }
@@ -604,6 +689,7 @@ export async function main(ns: NS): Promise<void> {
 				const sizingFreeRam = computeFreeRam(ns, hosts, reserveGb);
 				let totalFreeRamGb = 0;
 				for (const free of sizingFreeRam.values()) totalFreeRamGb += free;
+				totalFreeRamGb = Math.max(0, totalFreeRamGb - fragmentationSlopGb(hosts, scriptRamGb));
 
 				workingSet = buildWorkingSet(ns, candidates, totalFreeRamGb, scriptRamGb);
 				const desiredHostnames = new Set(workingSet.map((t) => t.hostname));
@@ -645,9 +731,20 @@ export async function main(ns: NS): Promise<void> {
 		// One shared, progressively-drained freeRam snapshot per tick - every target due this
 		// tick is dispatched against it in working-set (best-scored-first) order, so a higher-
 		// scored target's demand is fully funded before any leftover RAM cascades to the next.
-		const freeRam = computeFreeRam(ns, hosts, currentReserveGb(ns, serverTreeReserveGb));
+		const dispatchReserveGb = currentReserveGb(ns, serverTreeReserveGb);
+		const freeRam = computeFreeRam(ns, hosts, dispatchReserveGb);
 		let totalFreeRamGb = 0;
 		for (const gb of freeRam.values()) totalFreeRamGb += gb;
+		if (totalFreeRamGb < 300) {
+			const perHost = [...freeRam.entries()].map(([h, gb]) => `${h}=${gb.toFixed(2)}`).join(", ");
+			ns.print(
+				`dispatch tick: ${hosts.length} hosts, ${totalFreeRamGb.toFixed(2)}GB free, reserveGb=${dispatchReserveGb.toFixed(2)} - per-host: ${perHost}`,
+			);
+		}
+		// Planning-level figure (fairShareGrowCapThreads/batchRamBudgetGb below) - see
+		// fragmentationSlopGb for why this is more conservative than the real, exact freeRam map
+		// dispatch()/dispatchBatch() actually allocate against.
+		const planningFreeRamGb = Math.max(0, totalFreeRamGb - fragmentationSlopGb(hosts, scriptRamGb));
 
 		const dueTargets = workingSet.filter((target) => {
 			const dueAt = nextDispatchAt.get(target.hostname);
@@ -669,8 +766,28 @@ export async function main(ns: NS): Promise<void> {
 		// tick, not a hardcoded constant, so it self-scales as the fleet or working set changes.
 		const fairShareGrowCapThreads =
 			dueTargets.length > 0
-				? Math.max(MEANINGFUL_PREP_THREADS, Math.floor(totalFreeRamGb / dueTargets.length / scriptRamGb.grow))
+				? Math.max(MEANINGFUL_PREP_THREADS, Math.floor(planningFreeRamGb / dueTargets.length / scriptRamGb.grow))
 				: 0;
+		// Fair-share cap on primed/batch-phase RAM claims - see dispatchTarget's comment for why
+		// this is sized off working-set width, not just dueTargets.length like
+		// fairShareGrowCapThreads above: batch cadence (periodMs, as low as BATCH_GAP_MS*4) is far
+		// shorter than prep's per-round cadence, so a target that's due THIS tick will usually be
+		// due again next tick regardless, while a working-set member that isn't due yet still
+		// deserves its slice held open rather than momentarily-idle RAM getting swallowed by
+		// whichever target happens to be due right now.
+		//
+		// Only counts targets whose own one-batch cost could conceivably fit the CURRENT total pool
+		// (minFundableUnitRamGb <= totalFreeRamGb) - confirmed in-game 2026-07-30: naively dividing
+		// by workingSet.length let a top-scored-but-hopeless candidate (needing 1188GB against a
+		// 376GB fleet, structurally unfundable regardless of any share size) permanently halve the
+		// budget for the one candidate that actually fit (189GB), pushing it just over its own new
+		// budget and starving the only target capable of earning anything. A candidate that can
+		// never fund even its own full share isn't actually competing for RAM, so it shouldn't
+		// shrink anyone else's.
+		const plausibleBatchTargetCount = workingSet.filter(
+			(target) => isPrimed(ns, target.hostname) && minFundableUnitRamGb(ns, target.hostname, scriptRamGb) <= planningFreeRamGb,
+		).length;
+		const batchRamBudgetGb = plausibleBatchTargetCount > 0 ? planningFreeRamGb / plausibleBatchTargetCount : planningFreeRamGb;
 
 		let earliestNext = Infinity;
 		for (const target of workingSet) {
@@ -680,7 +797,7 @@ export async function main(ns: NS): Promise<void> {
 				continue;
 			}
 
-			const waitMs = dispatchTarget(ns, target.hostname, hosts, freeRam, fairShareGrowCapThreads);
+			const waitMs = dispatchTarget(ns, target.hostname, hosts, freeRam, fairShareGrowCapThreads, scriptRamGb, batchRamBudgetGb);
 			const next = now + waitMs;
 			nextDispatchAt.set(target.hostname, next);
 			earliestNext = Math.min(earliestNext, next);
