@@ -80,15 +80,12 @@ function ascendIfWorthwhile(ns: NS, member: GangMember, isHacking: boolean): voi
 	}
 }
 
+// "Train Combat"/"Train Hacking" both carry isCombat: true, isHacking: true in the game's own
+// task metadata (they're universal, assignable to either gang type), so filtering on those
+// flags can't tell them apart - match the exact task name instead.
 function pickTrainTask(tasks: GangTask[], isHacking: boolean): string | undefined {
-	return tasks.find(
-		(t) =>
-			t.name !== "Unassigned" &&
-			t.baseMoney === 0 &&
-			t.baseRespect === 0 &&
-			t.baseWanted === 0 &&
-			(isHacking ? t.isHacking : t.isCombat),
-	)?.name;
+	const trainTaskName = isHacking ? "Train Hacking" : "Train Combat";
+	return tasks.find((t) => t.name === trainTaskName)?.name;
 }
 
 // Mirrors calculateMoneyGain/calculateRespectGain from the game's own
