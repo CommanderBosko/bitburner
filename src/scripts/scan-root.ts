@@ -46,23 +46,30 @@ export async function main(ns: NS): Promise<void> {
 		`scan-root: ${rootedCount}/${reports.length} servers rooted, ${hackableCount} hackable at level ${hackingLevel}. Results written to /data/servers.json`,
 	);
 
+	// Launched before controller.js (not via hacknet-manager.js, which is now low-priority and
+	// may never get RAM) since scan-loop/rescan-loop is one of the three scripts that must
+	// always run: without it re-scanning, controller.js's weaken/grow/hack dispatch never learns
+	// about newly rooted targets as hacking level climbs. Order matters on a cold boot (nothing
+	// else running yet): controller.js's dispatch loop starts claiming home RAM for
+	// weaken/grow/hack every tick as soon as it launches, so launching rescan-loop.js - a tiny,
+	// cheap script - first lets it reliably grab its RAM before controller.js has a chance to
+	// consume everything. Launching controller.js first (the previous order) let a cold boot's
+	// dispatch tick starve this launch attempt, observed in-game 2026-07-30 as "scan-root: failed
+	// to start scripts/rescan-loop.js" - recoverable via controller.js's own watchdog (see its
+	// startTime comment) but only after a real gap with rescan-loop.js not running.
+	if (!ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
+		const rescanPid = await runWithRetry(ns, RESCAN_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+		if (rescanPid === 0) {
+			ns.tprint(`scan-root: failed to start ${RESCAN_LOOP_SCRIPT} - check RAM/sync`);
+		}
+	}
+
 	// rescan-loop.js re-invokes this script every 30s; only chain-launch controller.js
 	// the first time (i.e. when it isn't already running).
 	if (!ns.isRunning(CONTROLLER_SCRIPT, "home")) {
 		const controllerPid = await runWithRetry(ns, CONTROLLER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
 		if (controllerPid === 0) {
 			ns.tprint(`scan-root: failed to start ${CONTROLLER_SCRIPT} - check RAM/sync`);
-		}
-	}
-
-	// Launched here directly (not via hacknet-manager.js, which is now low-priority and may
-	// never get RAM) since scan-loop/rescan-loop is one of the three scripts that must always
-	// run: without it re-scanning, controller.js's weaken/grow/hack dispatch never learns about
-	// newly rooted targets as hacking level climbs.
-	if (!ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
-		const rescanPid = await runWithRetry(ns, RESCAN_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-		if (rescanPid === 0) {
-			ns.tprint(`scan-root: failed to start ${RESCAN_LOOP_SCRIPT} - check RAM/sync`);
 		}
 	}
 }
