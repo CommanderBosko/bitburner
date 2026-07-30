@@ -29,11 +29,11 @@ Don't proceed until all three are given.
 
 ### 2. Scaffold the script and wire it onto the chain
 
-Run:
+Run, from the repo root:
 ```bash
-scripts/scaffold-loop.sh <name> <purpose> <interval-ms>
+.claude/skills/new-background-loop/scripts/scaffold-loop.sh <name> <purpose> <interval-ms>
 ```
-(a plain relative path works — this is a project-local skill, so Claude's working directory is already the repo root)
+(the bare relative path `scripts/scaffold-loop.sh` does **not** work — Claude's working directory is the repo root, not this skill's own directory, so the script must be addressed by its full path relative to repo root)
 
 This creates `src/scripts/<name>.ts` from `assets/loop-template.ts` (the single source of truth for the loop shape — don't re-type the template by hand, and if the pattern needs to change, edit that asset rather than hand-editing a generated file), carrying the `// CHAIN-TAIL` marker forward so it becomes the new last link. It then finds whichever script currently holds that marker, strips it, and inserts a chain-launch block (`if (!ns.isRunning(<NAME>_SCRIPT, "home")) { ... runWithRetry(...) ... }`) right where the marker was — i.e. immediately before that script's own `while (true) {`.
 
@@ -63,6 +63,8 @@ Tell the user:
 - **How to avoid it:** any `CONST_BLOCK`/append text built from more than one line must never be handed to `a\`/`i\`/`c\` as raw multi-line bash text — either append a trailing `\` to every line but the last before interpolating, or (more robust) write the block to a temp file and use sed's `r <tempfile>` read-in command instead of `a\` with inline text. In this failure the script's own step-3 guard (checking the marker still exists) caught the corruption and exited loudly rather than silently succeeding — but by then the file was already ruined; don't try to patch forward from that state. Instead `git checkout -- <tail-file>` to restore it, fix the root cause in the script (or wire the new script in by hand, copying an already-wired file like `controller.ts` as a template), and only then retry.
 - **What went wrong:** the fix above was diagnosed and written up as a gotcha, but the actual code change was never applied to `scaffold-loop.sh` — the script kept building a multi-line `CONST_BLOCK` and feeding it to raw `a\` text. The identical failure ("CHAIN-TAIL marker vanished from backdoor-loop.ts after edits above") recurred on the very next scaffold call (`darknet-manager`), and both times (`battlestation`, then `server-tree`/`darknet-manager`) the real fallback was abandoning automatic chain-tail wiring entirely and hand-wiring the launch straight into `controller.ts` instead (see the `BATTLESTATION_SCRIPT`/`SERVER_TREE_SCRIPT` blocks there) — a documented gotcha with an unapplied fix behaves exactly like an undocumented one.
 - **How to avoid it:** when a Gotcha's "How to avoid it" names a concrete code change to a skill's own script, apply that change in the same pass — don't leave it as prose for the next run to rediscover the hard way. This one is now actually fixed: `scaffold-loop.sh` writes `CONST_BLOCK` to a temp file and uses sed's `r <tempfile>` unconditionally (single- or multi-line), verified by re-running the full scaffold against a scratch clone of this repo with `darknet-manager.ts` as an unwired tail (no pre-existing `LAUNCH_RETRY_ATTEMPTS`) — it wired cleanly with a correct diff and no marker loss.
+- **What went wrong:** Step 2 previously claimed a bare relative path (`scripts/scaffold-loop.sh`) works because "Claude's working directory is already the repo root" — but that's precisely why it *doesn't* work: the script lives at `.claude/skills/new-background-loop/scripts/scaffold-loop.sh` relative to repo root, not at `scripts/scaffold-loop.sh`. This produced an exit-127 "no such file or directory" on the first attempt in three separate sessions (`gang-manager`, `company-work-loop`, `battlestation`) before the correct full path was found by trial and error each time.
+- **How to avoid it:** always invoke the script as `.claude/skills/new-background-loop/scripts/scaffold-loop.sh <name> <purpose> <interval-ms>` from the repo root (now corrected in Step 2 above). Don't assume "project-local skill" implies its scripts sit at the repo root — they sit under the skill's own directory.
 
 ## Scripts
 
