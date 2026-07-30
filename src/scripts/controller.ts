@@ -7,7 +7,7 @@ const GROW_SCRIPT = "scripts/grow.js";
 const HACK_SCRIPT = "scripts/hack.js";
 const WORKER_SCRIPTS = [WEAKEN_SCRIPT, GROW_SCRIPT, HACK_SCRIPT];
 const HACKNET_MANAGER_SCRIPT = "scripts/hacknet-manager.js";
-const HOME_RAM_LOOP_SCRIPT = "scripts/home-ram-loop.js";
+const HOME_UPGRADE_LOOP_SCRIPT = "scripts/home-upgrade-loop.js";
 const BATTLESTATION_SCRIPT = "scripts/battlestation.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
@@ -128,7 +128,7 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // gates behind LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB - so reserving its RAM before home clears
 // that threshold holds capacity open for a script that can't run yet, starving weaken/grow/hack
 // dispatch for nothing. Recomputed live (not captured once at startup) so the reserve kicks in
-// automatically once home-ram-loop.js grows home past the threshold, without needing a restart.
+// automatically once home-upgrade-loop.js grows home past the threshold, without needing a restart.
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const darknetReserveGb = hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) ? DARKNET_RAM_RESERVE_GB : 0;
 	return darknetReserveGb + serverTreeReserveGb;
@@ -492,9 +492,14 @@ function dispatchBatch(ns: NS, hostname: string, hosts: string[], freeRam: Map<s
 // Primed: HWGW batching - many batches kept concurrently in flight, spaced by
 // MIN_BATCH_PERIOD_MS regardless of any one batch's own full duration, so idle time between one
 // batch's landings gets filled by others.
-function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<string, number>): number {
+//
+// growThreadCap bounds only the prep branch's grow request (see main()'s fair-share comment for
+// why) - batching is left uncapped here since a single HWGW batch is already sized off
+// HACK_MONEY_FRACTION of the target's own maxMoney, not an unbounded regrow-from-scratch demand,
+// so it was never the source of one target claiming the entire pool in one dispatch call.
+function dispatchTarget(ns: NS, hostname: string, hosts: string[], freeRam: Map<string, number>, growThreadCap: number): number {
 	if (!isPrimed(ns, hostname)) {
-		const desiredGrowThreads = computeGrowThreads(ns, hostname);
+		const desiredGrowThreads = Math.min(computeGrowThreads(ns, hostname), growThreadCap);
 		// Weaken must only counter security that will actually be added this tick, not the full
 		// desired regrow plan - a target sitting near $0 money can want hundreds of thousands of
 		// grow threads, and sizing weaken off that uncapped number makes weaken alone request more
@@ -542,7 +547,7 @@ export async function main(ns: NS): Promise<void> {
 
 	// scan-loop (scan-root.js/rescan-loop.js), controller.js (this script), and the
 	// weaken/grow/hack dispatch below are the three must-run priorities. Every other manager
-	// (home-ram-loop.js, hacknet-manager.js, battlestation.js, server-purchase-manager.js) is
+	// (home-upgrade-loop.js, hacknet-manager.js, battlestation.js, server-purchase-manager.js) is
 	// launched only from inside the dispatch loop, after each tick's dispatch has already
 	// claimed its RAM - see the loop below - so none of them can starve actual hacking.
 
@@ -558,7 +563,7 @@ export async function main(ns: NS): Promise<void> {
 	};
 	// rescan-loop.js and scan-root.js only ever relaunch each other - nothing else in the chain
 	// watches them, so if rescan-loop.js ever dies (observed in-game: it silently stopped and
-	// nothing brought it back), server-purchase-manager.js/home-ram-loop.js (both gated on it
+	// nothing brought it back), server-purchase-manager.js/home-upgrade-loop.js (both gated on it
 	// running) stay dead forever too, freezing the purchased-server fleet and home RAM in place
 	// indefinitely with no visible error. controller.js is the one script guaranteed to already be
 	// alive whenever this matters, so it's the natural watchdog. Delayed past one full
@@ -641,6 +646,31 @@ export async function main(ns: NS): Promise<void> {
 		// tick is dispatched against it in working-set (best-scored-first) order, so a higher-
 		// scored target's demand is fully funded before any leftover RAM cascades to the next.
 		const freeRam = computeFreeRam(ns, hosts, currentReserveGb(ns, serverTreeReserveGb));
+		let totalFreeRamGb = 0;
+		for (const gb of freeRam.values()) totalFreeRamGb += gb;
+
+		const dueTargets = workingSet.filter((target) => {
+			const dueAt = nextDispatchAt.get(target.hostname);
+			return dueAt === undefined || dueAt <= now;
+		});
+		// Fair-share cap on prep-phase grow demand: without this, a single due target whose
+		// desired regrow count vastly exceeds the fleet's total capacity (confirmed in-game
+		// 2026-07-30: one drained target wanted 554 grow threads, ~3x the entire fleet's RAM)
+		// gets dispatched first in score order and its uncapped request greedily fills 100% of
+		// this tick's freeRam via dispatch()'s plain greedy fill - permanently starving every
+		// other due target (and this file's own weaken/grow ratio math never blocks it, since it
+		// only sizes weaken off whatever grow turns out fundable). Bounding each due target's
+		// request to roughly an even share of the tick's starting free pool (floored at
+		// MEANINGFUL_PREP_THREADS so a cheap target isn't blocked below the threshold that
+		// already defines "meaningful progress" for buildWorkingSet) lets leftover a target
+		// doesn't use still cascade to the next one via the same shared, mutated freeRam map -
+		// this only ever tightens an upper bound, never reserves RAM away from what's really
+		// available. Recomputed fresh from the live due-target count and free-pool size each
+		// tick, not a hardcoded constant, so it self-scales as the fleet or working set changes.
+		const fairShareGrowCapThreads =
+			dueTargets.length > 0
+				? Math.max(MEANINGFUL_PREP_THREADS, Math.floor(totalFreeRamGb / dueTargets.length / scriptRamGb.grow))
+				: 0;
 
 		let earliestNext = Infinity;
 		for (const target of workingSet) {
@@ -650,14 +680,14 @@ export async function main(ns: NS): Promise<void> {
 				continue;
 			}
 
-			const waitMs = dispatchTarget(ns, target.hostname, hosts, freeRam);
+			const waitMs = dispatchTarget(ns, target.hostname, hosts, freeRam, fairShareGrowCapThreads);
 			const next = now + waitMs;
 			nextDispatchAt.set(target.hostname, next);
 			earliestNext = Math.min(earliestNext, next);
 		}
 
 		// Watchdog: relaunch rescan-loop.js if it's ever found dead, so a one-off crash/kill
-		// doesn't silently freeze server-purchase-manager.js/home-ram-loop.js (and, transitively,
+		// doesn't silently freeze server-purchase-manager.js/home-upgrade-loop.js (and, transitively,
 		// backdoor-loop.js/company-work-loop.js/the darknet tail) forever - see the comment on
 		// startTime above for why this waits one RETARGET_INTERVAL_MS before ever firing.
 		if (Date.now() - startTime > RETARGET_INTERVAL_MS && !ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
@@ -669,7 +699,7 @@ export async function main(ns: NS): Promise<void> {
 			);
 		}
 
-		// home-ram-loop.js is always allowed, ungated by the 64GB threshold below - it's the
+		// home-upgrade-loop.js is always allowed, ungated by the 64GB threshold below - it's the
 		// actual fix for the RAM ceiling - and only attempted after this tick's dispatch above has
 		// already claimed its RAM. But it's also gated on rescan-loop.js already running, same as
 		// server-purchase-manager.js below and for the same reason: without SF4-tier-1,
@@ -678,10 +708,10 @@ export async function main(ns: NS): Promise<void> {
 		// "scan-root: failed to start scripts/rescan-loop.js" boot race that fix was written for -
 		// just via this script instead of server-purchase-manager.js, which the earlier fix didn't
 		// cover.
-		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home") && !ns.isRunning(HOME_RAM_LOOP_SCRIPT, "home")) {
-			const pid = ns.run(HOME_RAM_LOOP_SCRIPT);
+		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home") && !ns.isRunning(HOME_UPGRADE_LOOP_SCRIPT, "home")) {
+			const pid = ns.run(HOME_UPGRADE_LOOP_SCRIPT);
 			if (pid === 0) {
-				ns.print(`controller: still waiting for RAM to start ${HOME_RAM_LOOP_SCRIPT}`);
+				ns.print(`controller: still waiting for RAM to start ${HOME_UPGRADE_LOOP_SCRIPT}`);
 			}
 		}
 
