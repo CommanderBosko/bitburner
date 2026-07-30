@@ -1,3 +1,36 @@
+## Session: 2026-07-30 (evening, later) — Root-caused and fixed the sixth (and final) cause of the multi-session $0/pitiful-income saga: fleet-growth managers starved, batch dispatch couldn't survive small-tier RAM fragmentation
+
+**Focus**: User reported scripted income had finally moved off $0 but stayed ~10x below Hacknet ($14.269k vs $133.749k over the same offline stretch); live-diagnose the gap rather than assume it was just early-game weakness.
+
+### What changed (and why)
+- Confirmed via `AskUserQuestion` the user wanted to diagnose the gap (not just log the $0→nonzero win and stop), consistent with this project's pattern of not declaring a symptom fully resolved until the underlying cause is understood.
+- Read through `controller.ts`'s current dispatch model in full before touching anything, to reason about the batching/admission math rather than guess from log output alone.
+- Added targeted diagnostics (per-candidate `buildWorkingSet` accept/reject prints, a per-host free-RAM dump gated at `<300GB`) and had the user paste real tail logs across several rounds — same live-bisection pattern as every prior session in this saga.
+- Found and fixed four stacked bugs in one pass (`47b60fe`):
+  1. `home-upgrade-loop.js`/`server-purchase-manager.js` had no RAM reserve — a working set that could only fund one target re-claimed 100% of free RAM every ~80ms, permanently starving the fleet-growth managers. Fixed with a small reserve in `currentReserveGb`, held only while each isn't yet running.
+  2. The batch fair-share divisor (added this session, `workingSet.length`) counted a structurally-unfundable candidate (`omega-net`, needing ~3x the fleet) toward the split, halving the budget for the one target that actually fit and starving it too. Fixed to divide only among candidates whose own cost could conceivably fit the pool.
+  3. `dispatchBatch` checked/committed ops in a fixed order, so on a fleet of mostly 8-16GB servers the earlier ops always claimed whole hosts first, leaving only fragments for whichever op needed the most threads. Fixed with first-fit-decreasing packing (largest first) — caught and fixed a subtlety before shipping: the dry-run check and the real commit must use the *identical* order, or they can disagree and risk a partial batch.
+  4. `buildWorkingSet`'s coarse admission math had no visibility into real per-host thread-rounding loss (~15-20GB stranded across ~24 small-tier hosts) — it admitted a target on a margin smaller than that loss. Fixed with a fleet-size-scaled fragmentation safety margin applied to planning-level estimates only (the real dispatch-time `freeRam` map stays exact).
+- Verified live at the end: `hack.js` now appears in Active Scripts and money is climbing — the first fix in this saga confirmed via the actual proof (real income), not just absence of the prior failure symptom.
+
+### Decisions
+- Diagnosed live rather than assuming the income gap was just "early game" — each round of evidence (per-candidate admission log, per-host free-RAM dump, `ps-audit.js` output) ruled out or confirmed a specific hypothesis before moving to the next.
+- User directly identified which of four resident processes were safe to kill to free RAM for `ps-audit.js` (the three self-healing, watchdog-relaunched ones — not `controller.js` itself, which nothing auto-relaunches).
+- Caught and fixed a real correctness bug in my own first pass at the packing fix before shipping it (dry-run check and commit using different orders could disagree) rather than letting the user find it live.
+- Caught and fixed my own second-pass bug too — the batch fair-share divisor naively used `workingSet.length`, which double-counted a hopeless candidate and made things *worse* (blocked the one target that had been working). Fixed by excluding structurally-unfundable candidates from the divisor.
+
+### Issues / surprises
+- A "phantom" ~189GB free-RAM gap (real free RAM reading far lower than `buildWorkingSet`'s own snapshot moments earlier) turned out to be a real, if transient, artifact — most likely stale in-flight processes from before this session's fixes — not a new bug; it resolved on its own once the reserve fix let the fleet-growth managers finally run.
+- This is the **sixth** distinct root cause of the same income-symptom class on this save, following `c344ad9`, `f2ccfc8`/`f96635d`, `7c666e0`, `20a2872`, and `75bae6a` across five prior sessions. Each prior fix was real and necessary but not sufficient on its own — worth remembering for any future recurrence: check whether it's a new, seventh cause before assuming "still not working" means a previous fix was wrong.
+
+### Next session
+- Confirm income holds over a real unattended stretch and check whether the gap vs. Hacknet narrows as `server-purchase-manager.js` (now finally unblocked) consolidates the fleet out of its current mostly-8-16GB-tier shape.
+- Watch `omega-net` — still permanently unfundable at current fleet size (~1189GB needed vs. ~416GB fleet), harmless dead weight in the working set.
+
+**Commits**: `47b60fe` (1 commit)
+
+---
+
 ## Session: 2026-07-30 (evening) — tprint UX fix, plus root-caused the rescan-loop.js cold-boot race at its source
 
 **Focus**: Add `ns.tprint` for buy/upgrade events in two scripts; then root-cause a fresh in-game report of `"scan-root: failed to start scripts/rescan-loop.js"` after the user killed all scripts and manually re-ran `scan-root.js`.
@@ -109,34 +142,6 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - See `project-state.md` for the full current-state writeup and remaining open items.
 
 **Commits**: `e6ecab9..f96635d` (2 commits this session: `f2ccfc8`, `f96635d`)
-
----
-
-## Session: 2026-07-29 — Root-caused and fixed the post-BN4-reset "$0 income" stall in controller.ts
-
-**Focus**: User reported hacking scripts earning literally $0 over a 5h40m offline run despite 25 purchased servers and many rooted world targets; live-debug to find and fix the real cause rather than guess.
-
-### What changed (and why)
-- Started from a screenshot of the offline-progress popup ($0 scripted income, $552k from Hacknet) and worked through several rounds of live diagnosis: checked whether `controller.js` was running stale pre-fix code (it wasn't — already restarted), got the user's server tree (25 purchased 8GB servers, ~14 rooted+hackable world targets), then `/data/servers.json`, then added temporary `ns.print` diagnostics to `controller.ts` and had the user paste real tail-log output across multiple restart-and-check rounds.
-- Found two real bugs in `buildWorkingSet`, both independent of the RAM-dispatch fixes from the previous session (`25790fa`): (1) it debited the simulated RAM pool by `needed` (an unbounded demand ceiling, up to ~100x a target's real one-batch cost) instead of `minUnit` (the actual fundable-unit cost) — letting one admitted, barely-fundable candidate zero out the pool and starve everyone after it; (2) it used `break` instead of `continue` when a candidate couldn't be funded, wrongly assuming RAM cost tracks the score-sorted candidate order — `omega-net` (top-scored, needing 732 hack threads, ~5-6x the whole fleet's capacity) was stopping the loop before it ever reached `foodnstuff`/`joesguns`/`n00dles`/etc.
-- Also discovered `controller.ts` never called `ns.disableLog` — default auto-logging of every `ns.*` getter (~24 hosts scanned per tick) was flooding the tail buffer and hiding the very diagnostics added to find the bug above. Added `ns.disableLog("ALL")` plus permanent (not just temporary) diagnostic prints in `buildWorkingSet`/`dispatchBatch`/`dispatchTarget`, since they're cheap and would have made this a one-round-trip fix instead of several.
-- Confirmed fixed in-game: working set went from `[omega-net]` only to all 13 fundable candidates, and Active Scripts showed real `weaken.js` threads spread across the pserv fleet targeting `phantasy` — correct, expected saturation behavior for a fleet with a badly-neglected highest-priority target, not a bug.
-- User explicitly asked to double-check before committing at two points; both checks (Active Scripts screenshot, math cross-check on the reported free-RAM figure) confirmed the fix was real rather than just quiet on the surface.
-
-### Decisions
-- Kept the diagnostic `ns.print` calls in `controller.ts` permanently rather than stripping them post-fix — they only print on failure or once per 30s, and this investigation would have been a single round-trip instead of several if they'd existed from the start.
-- Didn't touch `omega-net`'s perpetual failed-retry behavior — it's genuinely too big for the current fleet (not a bug), so left it as a known, harmless tech-debt item rather than adding backoff/deprioritization logic that wasn't asked for.
-
-### Issues / surprises
-- The RAM-starvation bug the user hit was a *different* bug from the one fixed in the immediately-prior session (`25790fa`) — that fix addressed a real issue but didn't cover this one, both living in the same function (`buildWorkingSet`). Two independent bugs in one small function is worth remembering if `buildWorkingSet` needs touching again.
-- Default Bitburner auto-logging turned out to be an active obstacle to debugging this specific problem, not just noise — it directly hid the diagnostic evidence needed to find the real bug on the first attempt.
-
-### Next session
-- Confirm `phantasy` eventually gets primed and money climbs from real scripted hacking (not just Hacknet/faction income).
-- Investigate why `home-ram-loop.ts` hasn't grown `home` past 32GB in 3+ days of continuous running.
-- See `project-state.md` for the full current-state writeup and remaining open items.
-
-**Commits**: `6eac25b..c344ad9` (1 commit this session, `c344ad9`; `6eac25b` and `25790fa` belong to prior unclosed sessions, not this one)
 
 ---
 
