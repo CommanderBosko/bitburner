@@ -1,3 +1,33 @@
+## Session: 2026-07-30 — Root-caused why the pserver-fragmentation fix never ran: rescan-loop.js had died with nothing watching it
+
+_Older entries are in [session-summary-archive.md](session-summary-archive.md)._
+
+**Focus**: User reported a 14h12m offline stretch produced literally $0 scripted income (Hacknet still earned fine) right after the prior session's `f2ccfc8` fragmentation fix — find out why BN4 kept failing where BN1 had worked, live-diagnose rather than guess.
+
+### What changed (and why)
+- Read `project-state.md`/`session-summary.md` first: the prior close had left `f2ccfc8` explicitly marked "not yet re-confirmed in-game," and the 14h12m offline stretch started right after that close — an immediate lead.
+- Timestamp arithmetic on a controller.js Active-Scripts screenshot (Online Time + Offline Time) put its start within ~3 minutes of the relevant fix commits — too close to call given clock uncertainty, so didn't treat it as decisive (per the standing rule to verify live fixes with real evidence, not inference).
+- Asked for `server-purchase-manager.js`'s own log instead — it wasn't running at all. Full Active Scripts list on `home` confirmed only 5 processes resident: `controller.js` plus 4 stray `weaken.js`, no `rescan-loop.js`/`home-ram-loop.js`/`server-purchase-manager.js`.
+- Root cause: `controller.ts` gates both managers on `rescan-loop.js` already running, but nothing relaunches `rescan-loop.js` itself if it dies — it and `scan-root.js` only ever relaunch each other. It had evidently been killed (most likely during the prior session's live-debug) and never restarted, freezing the whole downstream chain (pserver buying/upgrading, home RAM growth) for the full 14h12m, so `f2ccfc8`'s real fix never got a chance to run.
+- Fixed the structural gap, not just this instance: added a watchdog in `controller.ts` (the one script guaranteed already alive) that relaunches `rescan-loop.js` if found dead, delayed one `RETARGET_INTERVAL_MS` past its own start to avoid reintroducing the `75c5bb7` boot-race.
+- User manually killed all scripts on `home` and re-ran `scan-root.js`; confirmed live afterward — all 6 expected processes back (`controller.js`, `rescan-loop.js`, `home-ram-loop.js`, `server-purchase-manager.js`, plus real `weaken.js`/`grow.js` threads against `phantasy`).
+
+### Decisions
+- Skipped the full `/interview` ceremony (per its own gotcha) since this was a well-scoped, already-partially-diagnosed bug hunt, not a fuzzy new build — just confirmed fix-scope (diagnose-and-fix vs. diagnose-only) via one AskUserQuestion.
+- Chose to fix the underlying single-point-of-failure (watchdog) rather than just tell the user to restart `rescan-loop.js` this once, since nothing in the chain would catch the next occurrence either.
+
+### Issues / surprises
+- The answer to "why did BN1 work but BN4 doesn't" wasn't a BitNode mechanic difference at all — BN1's fleet was already huge/consolidated by the time these managers existed, so this exact bug never got a chance to matter; BN4's fresh small-scale restart is precisely the regime where a frozen, fragmented fleet actually starves everything.
+- A confirmed, real fix (`f2ccfc8`) can still produce zero observable effect if the script it lives in silently isn't running — worth remembering that "the fix is correct" and "the fix is in effect" are separate claims to verify.
+
+### Next session
+- Confirm scripted income holds above $0.000/sec over a real multi-hour unattended stretch, and check `server-purchase-manager.js`'s log for actual `"upgraded pserv-... to Xgb"` lines.
+- See `project-state.md` for the full current-state writeup.
+
+**Commits**: `7c666e0` (1 commit)
+
+---
+
 ## Session: 2026-07-29 (later same day) — Root-caused the *real* $0-income cause: pserver RAM fragmentation, past the earlier buildWorkingSet fix
 
 **Focus**: User asked "is this ok?" about an Active Scripts screenshot showing `$0.000/sec` production; live-diagnose whether the earlier same-day `c344ad9` fix had actually resolved the $0-income problem, since it hadn't been confirmed with decisive evidence yet.
@@ -106,38 +136,6 @@
 - Continue `singularity-roadmap.md`'s Tier 2+ (faction work loop, then the previously-shelved augmentation-purchasing brief).
 
 **Commits**: `d9e8a89`..`7494d0e` (3 commits)
-
----
-
-## Session: 2026-07-24 — Darknet crash fix, tail-window polish, BitNode win-conditions doc, skill-audit fixes
-
-_Older entries are in [session-summary-archive.md](session-summary-archive.md)._
-
-**Focus**: Seven small unclosed sessions across the day — a live darknet crash fix, tail-window sizing/positioning work on `battlestation.ts`/`server-tree.ts` (plus a new `position-tail-window` skill), a BitNode win-conditions reference doc, and a `skill-audit` pass that fixed three real skill bugs.
-
-### What changed (and why)
-- User hit a live runtime error after an augment install: `dnet.getDarknetInstability` failing because `DarkscapeNavigator.exe` had been wiped (same standing augment-reset pattern as every other home `.exe`). Since it can't be auto-repurchased (Singularity-gated, no SF4), guarded the call with `fileExists`, added a one-time warning, and disabled the instability throttle until the program is manually repurchased.
-- User asked for `server-tree.ts` to move to the top-right, then top-left, and to double then fix its width to 1000 — iterated live via pixel-delta feedback, landed on `(10, 10)` at 1000px wide.
-- User asked whether BN1's win condition was just money (they're at $34T). Ran `/research` (6 parallel agents against the game's source, official docs, and community guides) since the official docs' "BitNode Details" section is an unwritten TODO. Wrote `bitnodes.md`: money is a gate, not the win condition — every BitNode (including BN1) is completed via Daedalus invite → The Red Pill augmentation → manually hacking `w0r1d_d43m0n` at hacking ≥3000. Corrected a first-pass gap (missing 30-augmentations requirement for Daedalus) once the user flagged it.
-- User asked `battlestation.ts` to use the full screen vertically. Skipped the full `/interview` ceremony per its own guidance (small, well-scoped, obvious implementation path) and used `ns.ui.windowSize()` (0GB RAM) to size height dynamically; then iterated width (500 → 600) and X-position (anchored left of the Overview panel via a measured `OVERVIEW_WIDTH = 220` estimate, since no API exposes that panel's width) via user feedback; then a final 5px nudge down-and-left.
-- Ran `/skill-audit`, then "fix it all": found and fixed three real bugs — `ns-cost-lookup` dropped the RAM-scaling suffix on tiered-cost (Singularity) methods and errored on unexported interfaces like `UserInterface`; `new-worker-script`'s scaffold template had drifted to the pre-HWGW-batching 1-arg worker shape; three skills (`check-unlock`, `ram-audit`, `new-background-loop`) had stale doc references from earlier refactors.
-- Asked "should we make a skill for [tail-window positioning]?" after noticing the pattern — built `position-tail-window` (knowledge/judgment skill, no scripts/assets), smoke-tested with a real then-reverted nudge to `server-tree.ts`, then used it for real to give `server-tree.ts` the same dynamic-height treatment as `battlestation.ts`.
-
-### Decisions
-- A documented gotcha with an unapplied fix behaves like an undocumented one — applied the `skill-audit` fixes in the same pass rather than just reporting them (same rule as the 2026-07-23 close).
-- `position-tail-window` scoped as judgment work (interpreting pixel-delta corrections), not template generation — no `scripts/`/`assets/` needed.
-- Tail-window height is now computed from `ns.ui.windowSize()` minus a fixed `TAIL_HEIGHT_MARGIN` (100px) browser-chrome allowance, rather than a hardcoded pixel constant — established on `battlestation.ts` this session, then reused for `server-tree.ts`.
-
-### Issues / surprises
-- None of this session's work touched the HWGW batching or purchased-server-automation verification still pending from the 2026-07-23 close — those remain open.
-- No project-local `secret-scan` skill existed yet for this repo's close-out public-safety pass — generated one via `/create-secret-scan` (no dedicated secret-management scheme; plain gitignored `.env`), ran it, and confirmed clean (no secrets in the tree or 58-commit history) before publishing README changes.
-
-### Next session
-- Verify `darknet-manager.ts`'s missing-`DarkscapeNavigator.exe` warning/recovery in-game.
-- Still pending from 2026-07-23: verify HWGW batching and purchased-server automation in-game (see `project-state.md`).
-- Toward BitNode 4 completion: Daedalus invite → Red Pill → hack `w0r1d_d43m0n` (manual, not scriptable pre-SF4).
-
-**Commits**: `a88282c`..`da1c6cd` (11 commits)
 
 ---
 
