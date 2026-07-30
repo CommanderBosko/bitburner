@@ -1,3 +1,30 @@
+## Session: 2026-07-30 (evening) — tprint UX fix, plus root-caused the rescan-loop.js cold-boot race at its source
+
+**Focus**: Add `ns.tprint` for buy/upgrade events in two scripts; then root-cause a fresh in-game report of `"scan-root: failed to start scripts/rescan-loop.js"` after the user killed all scripts and manually re-ran `scan-root.js`.
+
+### What changed (and why)
+- `home-upgrade-loop.ts`/`server-purchase-manager.ts`: switched buy/upgrade log lines from `ns.print` to `ns.tprint` (`670da72`) — matches the existing one-shot-event convention (`darknet-manager.ts`, `ps-audit.ts`); `print`-only fades from the tail window after a few seconds and was easy to miss for a one-shot purchase.
+- Found unrelated uncommitted work already in the tree at session start, with no session transcript behind it: a `home-ram-loop.ts` → `home-upgrade-loop.ts` rename (now also calls `upgradeHomeCores()`), a `controller.ts` fair-share cap on prep-phase grow demand, and a new standalone `ps-audit.ts` diagnostic. Committed separately (`75bae6a`) after confirming scope with the user via `AskUserQuestion`.
+- `scan-root.ts`: swapped the chain-launch order to start `rescan-loop.js` *before* `controller.js` (`77b07a7`) — root cause of the reported failure: on a cold boot, `controller.js`'s dispatch loop starts claiming home RAM for weaken/grow/hack the instant it launches, so launching it first starved out the much cheaper `rescan-loop.js`'s own launch attempt right after. Launch order doesn't affect `controller.js`'s correctness (only depends on `/data/servers.json`, already written before either launch).
+
+### Decisions
+- Verified via `AskUserQuestion` that `rescan-loop.js` was already running again (self-healed via the existing `7c666e0` controller.ts watchdog) before doing any further diagnosis — confirmed it wasn't an active outage, just a recoverable race, per the standing [[feedback_verify_ingame_before_declaring_fixed]] rule.
+- Fixed the race at its actual source (launch-order swap) rather than stopping at "the watchdog already recovers it" — every cold boot was still eating a real gap with `rescan-loop.js` down plus a cosmetic error message.
+- Split the tprint change and the found-uncommitted work into two separate commits (confirmed via `AskUserQuestion`) rather than bundling unrelated work into one commit.
+
+### Issues / surprises
+- The `controller.ts` fair-share grow-cap fix found already in the tree (`75bae6a`) appears to be the "fifth root cause" the prior session's Next Steps was explicitly watching for — its commit comment documents confirming a target wanting 554 grow threads (~3x the fleet) in-game, matching the exact failure shape `20a2872` alone didn't fully cover. Folded into `project-state.md`'s $0-income narrative since it directly continues that thread, even though no transcript exists for when it was actually written.
+- Neither the fair-share cap's effect on real income nor the `77b07a7` boot-order fix have been confirmed live yet — both are freshly built/committed this session.
+
+### Next session
+- Confirm `Total production`/`profit-watch.ts` moves off `$0.000/sec` now that both `20a2872` and `75bae6a` are live.
+- Confirm `77b07a7` actually stops the `rescan-loop.js` cold-boot failure message entirely (kill all scripts, re-run `scan-root.js`).
+- See `project-state.md` for the full current-state writeup.
+
+**Commits**: `75bae6a`..`77b07a7` (3 commits)
+
+---
+
 ## Session: 2026-07-30 (later) — Root-caused a fourth $0-income cause: buildWorkingSet diluting the fleet across too many prep targets at once
 
 **Focus**: User reported still-flat $0.000/sec production 20+ minutes after the same-day `7c666e0` watchdog reboot; live-diagnose rather than assume it was just still warming up, given this project's track record of three prior distinct causes of the identical symptom.
@@ -110,30 +137,6 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - See `project-state.md` for the full current-state writeup and remaining open items.
 
 **Commits**: `6eac25b..c344ad9` (1 commit this session, `c344ad9`; `6eac25b` and `25790fa` belong to prior unclosed sessions, not this one)
-
----
-
-## Session: 2026-07-27 — Doc close-out: ungate server-purchase-manager, fix boot race with rescan-loop
-
-**Focus**: Doc close-out for a prior unclosed session's single commit — this conversation itself made no code changes (transcript contains only the `/session-closer` invocation).
-
-### What changed (and why)
-- **`server-purchase-manager.ts` ungated from the 64GB home-RAM threshold** (`75c5bb7`) — unlike `hacknet-manager.ts`/`battlestation.ts` (pure RAM consumers, still gated), purchased-server RAM feeds the same host pool `controller.ts`'s dispatch draws from, so it helps hacking rather than competing with it.
-- Ungating it exposed a real boot race: `controller.ts`'s dispatch loop tried to launch `server-purchase-manager.ts` on its first tick while `scan-root.ts` was still mid-`runWithRetry` for `rescan-loop.ts` — the extra ~6.25GB starved `rescan-loop.ts`'s launch out in-game (confirmed via a "failed to start scripts/rescan-loop.js" message).
-- Fixed by gating `server-purchase-manager.ts`'s launch on `rescan-loop.ts` already running, rather than reverting the ungating — by then `scan-root.ts`'s `main()` has already returned, closing the contention window.
-
-### Decisions
-- Chose to fix the race by ordering `server-purchase-manager.ts`'s launch after `rescan-loop.ts` is confirmed up, rather than re-gating it behind the 64GB threshold — preserves the intended behavior (purchasing starts immediately, since it helps rather than competes) while still avoiding the race.
-
-### Issues / surprises
-- This close-out session did no code work itself — same pattern as the 2026-07-26 close. The commit closed here was made in a prior session that ended without running `/session-closer`.
-- Both fixes in `75c5bb7` (ungating + race fix) are build-verified only, not yet re-confirmed live in-game.
-
-### Next session
-- Verify in-game: `server-purchase-manager.ts` launches once `rescan-loop.ts` is up; `rescan-loop.ts` no longer fails to start under the old race.
-- Still pending from the prior close: verify the `7494d0e` RAM-priority gating fix and `company-work-loop.ts` in-game.
-
-**Commits**: `75c5bb7` (1 commit)
 
 ---
 
