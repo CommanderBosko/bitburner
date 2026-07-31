@@ -7,12 +7,10 @@ const GROW_SCRIPT = "scripts/grow.js";
 const HACK_SCRIPT = "scripts/hack.js";
 const WORKER_SCRIPTS = [WEAKEN_SCRIPT, GROW_SCRIPT, HACK_SCRIPT];
 const HACKNET_MANAGER_SCRIPT = "scripts/hacknet-manager.js";
-const HOME_UPGRADE_LOOP_SCRIPT = "scripts/home-upgrade-loop.js";
 const DARKNET_MANAGER_SCRIPT = "scripts/darknet-manager.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
-const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";
 const COMPANY_WORK_LOOP_SCRIPT = "scripts/company-work-loop.js";
 const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
 // Consumed by server-purchase-manager.ts to stop buying/upgrading once purchased-server
@@ -118,28 +116,26 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 	}
 }
 
-// home-upgrade-loop.js/server-purchase-manager.js get their own small reserve too - confirmed
-// in-game 2026-07-30: a working set that can only ever fund ONE cheap target (see
-// batchRamBudgetGb below) still re-claims literally 100% of home's free RAM every ~80ms via that
-// target's own batch cadence, so the "launched only after dispatch has already claimed its RAM"
-// ordering in main() left these two managers stuck on "still waiting for RAM to start"
-// indefinitely - freezing the exact fleet-growth mechanisms (pserver buying/upgrading, home RAM
-// growth) that would eventually make bigger targets affordable. Reserved only while NOT already
-// running (once resident, their cost is already reflected in ns.getServerUsedRam, so reserving
-// again would double-count and permanently waste that RAM).
+// server-purchase-manager.js gets its own small reserve too - confirmed in-game 2026-07-30: a
+// working set that can only ever fund ONE cheap target (see batchRamBudgetGb below) still
+// re-claims literally 100% of home's free RAM every ~80ms via that target's own batch cadence, so
+// the "launched only after dispatch has already claimed its RAM" ordering in main() left this
+// manager stuck on "still waiting for RAM to start" indefinitely - freezing the fleet-growth
+// mechanism (pserver buying/upgrading) that would eventually make bigger targets affordable.
+// Reserved only while NOT already running (once resident, its cost is already reflected in
+// ns.getServerUsedRam, so reserving again would double-count and permanently waste that RAM).
 //
 // rescan-loop.js's own watchdog relaunch (see main()'s "Watchdog" block) needs the identical
 // protection: it only fires if rescan-loop.js has died, but without a reserve, dispatch could
 // have already claimed 100% of free RAM by the time that check runs, starving the one relaunch
-// that's supposed to unfreeze home-upgrade-loop.js/server-purchase-manager.js - the same failure
-// mode those two reserves exist to prevent, just one level up. Cheap and rare enough
-// (rescan-loop.js's base script cost, and only while it isn't already running) that reserving it
-// unconditionally every tick is negligible.
+// that's supposed to unfreeze server-purchase-manager.js - the same failure mode that reserve
+// exists to prevent, just one level up. Cheap and rare enough (rescan-loop.js's base script cost,
+// and only while it isn't already running) that reserving it unconditionally every tick is
+// negligible.
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const rescanLoopReserveGb = ns.isRunning(RESCAN_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(RESCAN_LOOP_SCRIPT, "home");
-	const homeUpgradeLoopReserveGb = ns.isRunning(HOME_UPGRADE_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(HOME_UPGRADE_LOOP_SCRIPT, "home");
 	const serverPurchaseManagerReserveGb = ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home") ? 0 : ns.getScriptRam(SERVER_PURCHASE_MANAGER_SCRIPT, "home");
-	return rescanLoopReserveGb + serverTreeReserveGb + homeUpgradeLoopReserveGb + serverPurchaseManagerReserveGb;
+	return rescanLoopReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb;
 }
 
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
@@ -634,10 +630,10 @@ export async function main(ns: NS): Promise<void> {
 
 	// scan-loop (scan-root.js/rescan-loop.js), controller.js (this script), and the
 	// weaken/grow/hack dispatch below are the three must-run priorities. Every other manager
-	// (home-upgrade-loop.js, hacknet-manager.js, darknet-manager.js, server-purchase-manager.js,
-	// company-work-loop.js, gang-manager.js, backdoor-loop.js) is launched only from inside the
-	// dispatch loop, after each tick's dispatch has already claimed its RAM - see the loop below -
-	// so none of them can starve actual hacking.
+	// (hacknet-manager.js, darknet-manager.js, server-purchase-manager.js, company-work-loop.js,
+	// gang-manager.js) is launched only from inside the dispatch loop, after each tick's dispatch
+	// has already claimed its RAM - see the loop below - so none of them can starve actual
+	// hacking.
 
 	// server-tree.js is deliberately NOT chain-launched (run it by hand when wanted), but its
 	// RAM still needs holding open so launching it later never has to wait on a batch to free up
@@ -651,10 +647,10 @@ export async function main(ns: NS): Promise<void> {
 	};
 	// rescan-loop.js and scan-root.js only ever relaunch each other - nothing else in the chain
 	// watches them, so if rescan-loop.js ever dies (observed in-game: it silently stopped and
-	// nothing brought it back), server-purchase-manager.js/home-upgrade-loop.js (both gated on it
-	// running) stay dead forever too, freezing the purchased-server fleet and home RAM in place
-	// indefinitely with no visible error. controller.js is the one script guaranteed to already be
-	// alive whenever this matters, so it's the natural watchdog. Delayed past one full
+	// nothing brought it back), server-purchase-manager.js (gated on it running) stays dead
+	// forever too, freezing the purchased-server fleet in place indefinitely with no visible
+	// error. controller.js is the one script guaranteed to already be alive whenever this
+	// matters, so it's the natural watchdog. Delayed past one full
 	// RETARGET_INTERVAL_MS from boot so this can't refire the exact race the rescan-loop.js gate
 	// below was built to avoid (controller.js's first tick landing while scan-root.js is still
 	// mid-runWithRetry for its own first launch of rescan-loop.js).
@@ -807,9 +803,8 @@ export async function main(ns: NS): Promise<void> {
 		}
 
 		// Watchdog: relaunch rescan-loop.js if it's ever found dead, so a one-off crash/kill
-		// doesn't silently freeze server-purchase-manager.js/home-upgrade-loop.js forever - see
-		// the comment on startTime above for why this waits one RETARGET_INTERVAL_MS before ever
-		// firing.
+		// doesn't silently freeze server-purchase-manager.js forever - see the comment on
+		// startTime above for why this waits one RETARGET_INTERVAL_MS before ever firing.
 		if (Date.now() - startTime > RETARGET_INTERVAL_MS && !ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
 			const pid = ns.run(RESCAN_LOOP_SCRIPT);
 			ns.print(
@@ -819,21 +814,12 @@ export async function main(ns: NS): Promise<void> {
 			);
 		}
 
-		// home-upgrade-loop.js is always allowed, ungated by the 64GB threshold below - it's the
-		// actual fix for the RAM ceiling - and only attempted after this tick's dispatch above has
-		// already claimed its RAM. But it's also gated on rescan-loop.js already running, same as
-		// server-purchase-manager.js below and for the same reason: without SF4-tier-1,
-		// ns.singularity.upgradeHomeRam costs 48GB (base 3GB * the 16x pre-SF4 multiplier), and an
-		// unconditional attempt here on controller.js's very first tick reintroduced the exact
-		// "scan-root: failed to start scripts/rescan-loop.js" boot race that fix was written for -
-		// just via this script instead of server-purchase-manager.js, which the earlier fix didn't
-		// cover.
-		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home") && !ns.isRunning(HOME_UPGRADE_LOOP_SCRIPT, "home")) {
-			const pid = ns.run(HOME_UPGRADE_LOOP_SCRIPT);
-			if (pid === 0) {
-				ns.print(`controller: still waiting for RAM to start ${HOME_UPGRADE_LOOP_SCRIPT}`);
-			}
-		}
+		// home-upgrade-loop.js is deliberately NOT chain-launched: `mem scripts/home-upgrade-loop.js`
+		// confirmed in-game it costs 99.65GB (upgradeHomeRam and upgradeHomeCores are each 48GB
+		// without SF4's multiplier reduction - the 16x tier in their "RAM cost: X GB * 16/4/1" doc
+		// comments), and upgradeHomeRam additionally errors outright without owning SF4 at all - not
+		// just an inflated cost. Since SF4 is only granted by completing BitNode 4, this script can't
+		// run yet regardless of home RAM or free capacity. Run it by hand later, once SF4 is owned.
 
 		// server-purchase-manager.js's first launch attempt used to race scan-root.js's own
 		// boot-time launch of rescan-loop.js: controller.js starts running (and hits this block on
@@ -857,15 +843,19 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
-		// hacknet-manager.js/darknet-manager.js/company-work-loop.js/gang-manager.js/
-		// backdoor-loop.js still wait for home RAM to clear the threshold before even attempting
-		// to launch, so they can never compete with scan-loop/controller/weaken-grow-hack (or
-		// server-purchase-manager.js) for RAM while home is this tight. Moved here from
-		// rescan-loop.js (2026-07-30) - they were never actually about rescanning, just riding
-		// along on rescan-loop.js's always-alive loop; controller.js's own dispatch-loop tick is
-		// the natural home for every lower-priority manager launch.
+		// hacknet-manager.js/darknet-manager.js/company-work-loop.js/gang-manager.js still wait
+		// for home RAM to clear the threshold before even attempting to launch, so they can never
+		// compete with scan-loop/controller/weaken-grow-hack (or server-purchase-manager.js) for
+		// RAM while home is this tight. Moved here from rescan-loop.js (2026-07-30) - they were
+		// never actually about rescanning, just riding along on rescan-loop.js's always-alive
+		// loop; controller.js's own dispatch-loop tick is the natural home for every lower-priority
+		// manager launch. backdoor-loop.js is NOT included here (removed 2026-07-31): both
+		// singularity.installBackdoor and singularity.connect require Source-File 4 outside
+		// BitNode 4 - same hard gate confirmed for singularity.upgradeHomeRam/upgradeHomeCores
+		// (see the home-upgrade-loop.js comment above) - so it can't do anything useful yet. Run
+		// it by hand later, once SF4 is owned.
 		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
-			for (const lowerPriorityScript of [GANG_MANAGER_SCRIPT, COMPANY_WORK_LOOP_SCRIPT, HACKNET_MANAGER_SCRIPT, BACKDOOR_LOOP_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
+			for (const lowerPriorityScript of [GANG_MANAGER_SCRIPT, COMPANY_WORK_LOOP_SCRIPT, HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
 				if (ns.isRunning(lowerPriorityScript, "home")) continue;
 				const pid = ns.run(lowerPriorityScript);
 				if (pid === 0) {
