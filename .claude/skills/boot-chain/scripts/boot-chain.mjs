@@ -24,11 +24,21 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadCosts, auditScript } from "../../ram-audit/scripts/ram-audit.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..", "..", "..");
 const ENTRYPOINT = "scan-root";
 const srcScriptsDir = join(repoRoot, "src", "scripts");
+
+const { base: ramBase, costs: ramCosts } = loadCosts();
+
+function ramLabel(name) {
+	const tsPath = join(srcScriptsDir, `${name}.ts`);
+	if (!existsSync(tsPath)) return "";
+	const { total } = auditScript(tsPath, ramBase, ramCosts);
+	return ` (${total.toFixed(2)}GB)`;
+}
 
 const constDeclPattern = /const\s+([A-Za-z0-9_]+)\s*=\s*"scripts\/([A-Za-z0-9_-]+)\.js"\s*;/;
 const gateCallPattern = /hasEnoughHomeRam\s*\(/;
@@ -125,24 +135,26 @@ function printNode(name, prefix, ancestors) {
 	kids.forEach(({ to, gated }, i) => {
 		const isLast = i === kids.length - 1;
 		const branch = isLast ? "└── " : "├── ";
+		const costLabel = ramLabel(to);
 		const gateLabel = gated ? " [gated ≥ 64GB]" : "";
 		const missingLabel = scriptExists(to) ? "" : " (missing!)";
 
 		if (nextAncestors.has(to)) {
-			console.log(`${prefix}${branch}${to}.js${gateLabel}${missingLabel} (already shown above, cycles back)`);
+			console.log(`${prefix}${branch}${to}.js${costLabel}${gateLabel}${missingLabel} (already shown above, cycles back)`);
 			return;
 		}
 
-		console.log(`${prefix}${branch}${to}.js${gateLabel}${missingLabel}`);
+		console.log(`${prefix}${branch}${to}.js${costLabel}${gateLabel}${missingLabel}`);
 		printNode(to, prefix + (isLast ? "    " : "│   "), nextAncestors);
 	});
 }
 
 console.log(`boot-chain: launch tree from ${ENTRYPOINT}.ts`);
 console.log("");
-console.log(`${ENTRYPOINT}.js`);
+console.log(`${ENTRYPOINT}.js${ramLabel(ENTRYPOINT)}`);
 printNode(ENTRYPOINT, "", new Set([ENTRYPOINT]));
 console.log("");
+console.log("(X.XXGB) = estimated static RAM cost of that script, per ram-audit's cost table (assets/ram-costs.json in ram-audit).");
 console.log("[gated ≥ 64GB] = only launches once hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) passes.");
 console.log("No suffix = launches unconditionally (retries on RAM failure via runWithRetry, but doesn't wait for a threshold).");
 

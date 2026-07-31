@@ -20,7 +20,7 @@ const costsPath = path.join(scriptDir, "..", "assets", "ram-costs.json");
 const repoRoot = process.cwd();
 const scriptsDir = path.join(repoRoot, "src", "scripts");
 
-function loadCosts() {
+export function loadCosts() {
   const raw = JSON.parse(fs.readFileSync(costsPath, "utf8"));
   const costs = {};
   for (const [key, value] of Object.entries(raw)) {
@@ -121,7 +121,7 @@ function collectFilesAndRefs(entryFile) {
   return refsByFile;
 }
 
-function auditScript(entryFile, base, costTable) {
+export function auditScript(entryFile, base, costTable) {
   const entryAbs = path.resolve(entryFile);
   const refsByFile = collectFilesAndRefs(entryAbs);
 
@@ -218,4 +218,6 @@ function main() {
   }
 }
 
-main();
+if (import.meta.url === url.pathToFileURL(process.argv[1] ?? "").href) {
+  main();
+}
