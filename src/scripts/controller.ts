@@ -12,6 +12,9 @@ const DARKNET_MANAGER_SCRIPT = "scripts/darknet-manager.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
+const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";
+const COMPANY_WORK_LOOP_SCRIPT = "scripts/company-work-loop.js";
+const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
 // Consumed by server-purchase-manager.ts to stop buying/upgrading once purchased-server
 // capacity already covers every known target's weaken+grow+hack demand - see
 // estimateTargetDemandGb for what "demand" means here.
@@ -128,10 +131,10 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // rescan-loop.js's own watchdog relaunch (see main()'s "Watchdog" block) needs the identical
 // protection: it only fires if rescan-loop.js has died, but without a reserve, dispatch could
 // have already claimed 100% of free RAM by the time that check runs, starving the one relaunch
-// that's supposed to unfreeze home-upgrade-loop.js/server-purchase-manager.js/backdoor-loop.js/
-// the whole gang tail behind it - the same failure mode those two reserves exist to
-// prevent, just one level up. Cheap and rare enough (rescan-loop.js's base script cost, and only
-// while it isn't already running) that reserving it unconditionally every tick is negligible.
+// that's supposed to unfreeze home-upgrade-loop.js/server-purchase-manager.js - the same failure
+// mode those two reserves exist to prevent, just one level up. Cheap and rare enough
+// (rescan-loop.js's base script cost, and only while it isn't already running) that reserving it
+// unconditionally every tick is negligible.
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const rescanLoopReserveGb = ns.isRunning(RESCAN_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(RESCAN_LOOP_SCRIPT, "home");
 	const homeUpgradeLoopReserveGb = ns.isRunning(HOME_UPGRADE_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(HOME_UPGRADE_LOOP_SCRIPT, "home");
@@ -631,9 +634,10 @@ export async function main(ns: NS): Promise<void> {
 
 	// scan-loop (scan-root.js/rescan-loop.js), controller.js (this script), and the
 	// weaken/grow/hack dispatch below are the three must-run priorities. Every other manager
-	// (home-upgrade-loop.js, hacknet-manager.js, darknet-manager.js, server-purchase-manager.js) is
-	// launched only from inside the dispatch loop, after each tick's dispatch has already
-	// claimed its RAM - see the loop below - so none of them can starve actual hacking.
+	// (home-upgrade-loop.js, hacknet-manager.js, darknet-manager.js, server-purchase-manager.js,
+	// company-work-loop.js, gang-manager.js, backdoor-loop.js) is launched only from inside the
+	// dispatch loop, after each tick's dispatch has already claimed its RAM - see the loop below -
+	// so none of them can starve actual hacking.
 
 	// server-tree.js is deliberately NOT chain-launched (run it by hand when wanted), but its
 	// RAM still needs holding open so launching it later never has to wait on a batch to free up
@@ -803,9 +807,9 @@ export async function main(ns: NS): Promise<void> {
 		}
 
 		// Watchdog: relaunch rescan-loop.js if it's ever found dead, so a one-off crash/kill
-		// doesn't silently freeze server-purchase-manager.js/home-upgrade-loop.js (and, transitively,
-		// backdoor-loop.js/company-work-loop.js) forever - see the comment on
-		// startTime above for why this waits one RETARGET_INTERVAL_MS before ever firing.
+		// doesn't silently freeze server-purchase-manager.js/home-upgrade-loop.js forever - see
+		// the comment on startTime above for why this waits one RETARGET_INTERVAL_MS before ever
+		// firing.
 		if (Date.now() - startTime > RETARGET_INTERVAL_MS && !ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
 			const pid = ns.run(RESCAN_LOOP_SCRIPT);
 			ns.print(
@@ -853,11 +857,15 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
-		// hacknet-manager.js/darknet-manager.js still wait for home RAM to clear the threshold
-		// before even attempting to launch, so they can never compete with scan-loop/controller/
-		// weaken-grow-hack (or server-purchase-manager.js) for RAM while home is this tight.
+		// hacknet-manager.js/darknet-manager.js/company-work-loop.js/gang-manager.js/
+		// backdoor-loop.js still wait for home RAM to clear the threshold before even attempting
+		// to launch, so they can never compete with scan-loop/controller/weaken-grow-hack (or
+		// server-purchase-manager.js) for RAM while home is this tight. Moved here from
+		// rescan-loop.js (2026-07-30) - they were never actually about rescanning, just riding
+		// along on rescan-loop.js's always-alive loop; controller.js's own dispatch-loop tick is
+		// the natural home for every lower-priority manager launch.
 		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
-			for (const lowerPriorityScript of [HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
+			for (const lowerPriorityScript of [GANG_MANAGER_SCRIPT, COMPANY_WORK_LOOP_SCRIPT, HACKNET_MANAGER_SCRIPT, BACKDOOR_LOOP_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
 				if (ns.isRunning(lowerPriorityScript, "home")) continue;
 				const pid = ns.run(lowerPriorityScript);
 				if (pid === 0) {
