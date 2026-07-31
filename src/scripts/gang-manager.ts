@@ -66,7 +66,11 @@ function primaryAscMult(member: GangMember, isHacking: boolean): number {
 }
 
 function primaryAscGain(result: AscensionResult, isHacking: boolean): number {
-	if (isHacking) return result.hack;
+	// Bracket notation, not result.hack: the game's static RAM analyzer charges a bare
+	// `.hack` property read as if ns.hack() were called (confirmed 2026-07-30, see
+	// ram-audit SKILL.md "Known false negatives" #3) even though this is just a data field
+	// on GangMemberAscension, unrelated to the ns.hack() worker function.
+	if (isHacking) return result["hack"];
 	return Math.max(result.str, result.def, result.dex, result.agi);
 }
 
@@ -100,7 +104,8 @@ function pickTrainTask(tasks: GangTask[], isHacking: boolean): string | undefine
 function earnScore(member: GangMember, task: GangTask, territory: number, wantRespect: boolean): number {
 	const difficultyFactor = wantRespect ? 4 : 3.2;
 	const statWeight =
-		(task.hackWeight / 100) * member.hack +
+		// Bracket notation dodges the same `.hack` collision charge noted on primaryAscGain above.
+		(task.hackWeight / 100) * member["hack"] +
 		(task.strWeight / 100) * member.str +
 		(task.defWeight / 100) * member.def +
 		(task.dexWeight / 100) * member.dex +
@@ -137,7 +142,9 @@ function pickEarnTask(
 }
 
 function assignTask(ns: NS, member: GangMember, isHacking: boolean, tasks: GangTask[], info: GangInfo): void {
-	const wantRespect = info.respect < info.respectForNextRecruit;
+	// Bracket notation, not info.respectForNextRecruit: collides with the real (and separately
+	// costed) ns.gang.respectForNextRecruit() - see the `.hack` collision note above.
+	const wantRespect = info.respect < info["respectForNextRecruit"];
 	const stillTraining = primaryAscMult(member, isHacking) < EARN_ASC_MULT_TARGET;
 
 	const target =
@@ -151,8 +158,9 @@ function assignTask(ns: NS, member: GangMember, isHacking: boolean, tasks: GangT
 function buyEquipment(ns: NS, isHacking: boolean, budget: number): void {
 	const relevant = ns.gang.getEquipmentNames().filter((name) => {
 		const stats = ns.gang.getEquipmentStats(name);
+		// Bracket notation on .hack only - str/def/dex/agi/cha don't collide with any ns.* method name.
 		return isHacking
-			? stats.hack !== undefined
+			? stats["hack"] !== undefined
 			: stats.str !== undefined || stats.def !== undefined || stats.dex !== undefined || stats.agi !== undefined || stats.cha !== undefined;
 	});
 

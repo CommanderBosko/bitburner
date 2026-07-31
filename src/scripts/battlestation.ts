@@ -83,9 +83,13 @@ function readServerReports(ns: NS): ServerReport[] {
 }
 
 interface TargetSummary {
-	weaken: number;
-	grow: number;
-	hack: number;
+	// weakenThreads/growThreads/hackThreads, not weaken/grow/hack: bare .weaken/.grow/.hack
+	// property reads collide with the real ns.weaken()/ns.grow()/ns.hack() function names - the
+	// game's static RAM analyzer charges them anyway (confirmed 2026-07-30 for the equivalent
+	// gang.* collision, see ram-audit SKILL.md "Known false negatives" #3).
+	weakenThreads: number;
+	growThreads: number;
+	hackThreads: number;
 	ramGb: number;
 }
 
@@ -108,10 +112,11 @@ function collectTargetSummaries(ns: NS): Map<string, TargetSummary> {
 			const target = process.args[0] === undefined ? "?" : String(process.args[0]);
 
 			const existing = summaries.get(target);
-			const summary: TargetSummary = existing === undefined ? { weaken: 0, grow: 0, hack: 0, ramGb: 0 } : existing;
-			if (action === "weaken") summary.weaken += process.threads;
-			else if (action === "grow") summary.grow += process.threads;
-			else if (action === "hack") summary.hack += process.threads;
+			const summary: TargetSummary =
+				existing === undefined ? { weakenThreads: 0, growThreads: 0, hackThreads: 0, ramGb: 0 } : existing;
+			if (action === "weaken") summary.weakenThreads += process.threads;
+			else if (action === "grow") summary.growThreads += process.threads;
+			else if (action === "hack") summary.hackThreads += process.threads;
 			summary.ramGb += process.threads * ns.getScriptRam(process.filename, host);
 			summaries.set(target, summary);
 		}
@@ -136,7 +141,9 @@ function renderWorkingSetLines(ns: NS): string[] {
 
 	const lines = ["--- Working Set ---"];
 	for (const [target, summary] of entries) {
-		lines.push(row(`${target}:`, `W:${summary.weaken} G:${summary.grow} H:${summary.hack} (${formatRam(summary.ramGb)})`));
+		lines.push(
+			row(`${target}:`, `W:${summary.weakenThreads} G:${summary.growThreads} H:${summary.hackThreads} (${formatRam(summary.ramGb)})`),
+		);
 	}
 	return lines;
 }

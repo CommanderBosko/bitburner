@@ -162,7 +162,7 @@ function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<str
 // admission math, the batch fair-share budget) - the real freeRam map used for actual dispatch
 // stays exact, since planHostAllocation already handles per-host truncation correctly on its own.
 function fragmentationSlopGb(hosts: string[], scriptRamGb: ScriptRamGb): number {
-	const maxThreadCostGb = Math.max(scriptRamGb.weaken, scriptRamGb.grow, scriptRamGb.hack);
+	const maxThreadCostGb = Math.max(scriptRamGb.weakenGb, scriptRamGb.growGb, scriptRamGb.hackGb);
 	return hosts.length * maxThreadCostGb;
 }
 
@@ -187,8 +187,12 @@ function isPrimed(ns: NS, hostname: string): boolean {
 }
 
 interface PrepPlan {
-	weaken: number;
-	grow: number;
+	// weakenThreads/growThreads, not weaken/grow: bare .weaken/.grow property reads collide with
+	// the real ns.weaken()/ns.grow() function names - the game's static RAM analyzer charges
+	// them anyway even though this is just a data field (confirmed 2026-07-30 for the equivalent
+	// gang.* collision, see ram-audit SKILL.md "Known false negatives" #3).
+	weakenThreads: number;
+	growThreads: number;
 }
 
 function computeGrowThreads(ns: NS, hostname: string): number {
@@ -220,7 +224,7 @@ function computeWeakenThreads(ns: NS, hostname: string, growThreads: number): nu
 // dispatch (dispatchTarget) sizes weaken off the RAM-capped grow count instead, not this.
 function computePrepPlan(ns: NS, hostname: string): PrepPlan {
 	const growThreads = computeGrowThreads(ns, hostname);
-	return { weaken: computeWeakenThreads(ns, hostname, growThreads), grow: growThreads };
+	return { weakenThreads: computeWeakenThreads(ns, hostname, growThreads), growThreads };
 }
 
 interface BatchPlan {
@@ -302,20 +306,22 @@ function computeBatchPlan(ns: NS, hostname: string): BatchPlan | null {
 }
 
 interface ScriptRamGb {
-	weaken: number;
-	grow: number;
-	hack: number;
+	// weakenGb/growGb/hackGb, not weaken/grow/hack: same bare-property collision as PrepPlan
+	// above (this one with ns.weaken()/ns.grow()/ns.hack() specifically).
+	weakenGb: number;
+	growGb: number;
+	hackGb: number;
 }
 
 function prepRamGb(plan: PrepPlan, scriptRamGb: ScriptRamGb): number {
-	return plan.weaken * scriptRamGb.weaken + plan.grow * scriptRamGb.grow;
+	return plan.weakenThreads * scriptRamGb.weakenGb + plan.growThreads * scriptRamGb.growGb;
 }
 
 function batchRamGb(plan: BatchPlan, scriptRamGb: ScriptRamGb): number {
 	return (
-		plan.hackThreads * scriptRamGb.hack +
-		(plan.weaken1Threads + plan.weaken2Threads) * scriptRamGb.weaken +
-		plan.growThreads * scriptRamGb.grow
+		plan.hackThreads * scriptRamGb.hackGb +
+		(plan.weaken1Threads + plan.weaken2Threads) * scriptRamGb.weakenGb +
+		plan.growThreads * scriptRamGb.growGb
 	);
 }
 
@@ -347,8 +353,8 @@ function minFundableUnitRamGb(ns: NS, hostname: string, scriptRamGb: ScriptRamGb
 	if (!isPrimed(ns, hostname)) {
 		const plan = computePrepPlan(ns, hostname);
 		const costs: number[] = [];
-		if (plan.weaken > 0) costs.push(scriptRamGb.weaken);
-		if (plan.grow > 0) costs.push(scriptRamGb.grow);
+		if (plan.weakenThreads > 0) costs.push(scriptRamGb.weakenGb);
+		if (plan.growThreads > 0) costs.push(scriptRamGb.growGb);
 		if (costs.length === 0) return Infinity;
 
 		// Bounded by the plan's own full cost so a target that's nearly done (needs only a
@@ -635,9 +641,9 @@ export async function main(ns: NS): Promise<void> {
 	// rather than a variable multi-dispatch worst case.
 	const serverTreeReserveGb = ns.getScriptRam(SERVER_TREE_SCRIPT, "home");
 	const scriptRamGb: ScriptRamGb = {
-		weaken: ns.getScriptRam(WEAKEN_SCRIPT, "home"),
-		grow: ns.getScriptRam(GROW_SCRIPT, "home"),
-		hack: ns.getScriptRam(HACK_SCRIPT, "home"),
+		weakenGb: ns.getScriptRam(WEAKEN_SCRIPT, "home"),
+		growGb: ns.getScriptRam(GROW_SCRIPT, "home"),
+		hackGb: ns.getScriptRam(HACK_SCRIPT, "home"),
 	};
 	// rescan-loop.js and scan-root.js only ever relaunch each other - nothing else in the chain
 	// watches them, so if rescan-loop.js ever dies (observed in-game: it silently stopped and
@@ -759,7 +765,7 @@ export async function main(ns: NS): Promise<void> {
 		// tick, not a hardcoded constant, so it self-scales as the fleet or working set changes.
 		const fairShareGrowCapThreads =
 			dueTargets.length > 0
-				? Math.max(MEANINGFUL_PREP_THREADS, Math.floor(planningFreeRamGb / dueTargets.length / scriptRamGb.grow))
+				? Math.max(MEANINGFUL_PREP_THREADS, Math.floor(planningFreeRamGb / dueTargets.length / scriptRamGb.growGb))
 				: 0;
 		// Fair-share cap on primed/batch-phase RAM claims - see dispatchTarget's comment for why
 		// this is sized off working-set width, not just dueTargets.length like

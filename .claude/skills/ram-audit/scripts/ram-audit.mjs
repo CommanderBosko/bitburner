@@ -53,12 +53,29 @@ function extractNsRefs(text) {
   return refs;
 }
 
+// Bare (non-`ns.`) property names that collide with a real, non-zero-cost ns.* method
+// name get charged as if that method were called - confirmed 2026-07-30 via
+// `mem scripts/gang-manager.js` (member.hack/result.hack/stats.hack and
+// info.respectForNextRecruit, plain data-field reads on Gang API return objects, were
+// each charged as if `ns.hack()`/`ns.gang.respectForNextRecruit()` had been called).
+// Cached per costTable object identity since main() only loads it once.
+const bareCollisionNameCache = new WeakMap();
+function bareCollisionNames(costTable) {
+  if (bareCollisionNameCache.has(costTable)) return bareCollisionNameCache.get(costTable);
+  const names = new Map();
+  for (const [key, val] of Object.entries(costTable)) {
+    if (val > 0) names.set(key.split(".").pop(), val);
+  }
+  bareCollisionNameCache.set(costTable, names);
+  return names;
+}
+
 // Known code shapes that make Bitburner's OWN static RAM analyzer (not this
-// estimator) fall back to a large, unrelated worst-case charge - confirmed
-// in-game via `mem <script>` on 2026-07-19, see the "Known false negatives"
-// section in SKILL.md for the full story. This tool has no way to predict the
-// bogus GB figure the game will attribute, so it can only flag the risky shape.
-function extractRiskFlags(text) {
+// estimator) fall back to a large charge unrelated to the script's real ns.* usage -
+// confirmed in-game via `mem <script>`, see the "Known false negatives" section in
+// SKILL.md for the full story. This tool has no way to predict the bogus GB figure the
+// game will attribute, so it can only flag the risky shape.
+function extractRiskFlags(text, costTable) {
   const clean = stripComments(text);
   const flags = [];
 
@@ -77,6 +94,22 @@ function extractRiskFlags(text) {
   // an otherwise-clean set of scripts.
   if (clean.includes("??")) {
     flags.push("uses the ?? (nullish coalescing) operator");
+  }
+
+  // Bare property access `.name` (no call parens, base isn't `ns`/`ns.<namespace>`)
+  // where `name` matches a non-zero-cost ns.* method's bare name.
+  for (const [name, cost] of bareCollisionNames(costTable)) {
+    const re = new RegExp(`([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\.${name}\\b(?!\\s*\\()`, "g");
+    let m;
+    const seenBases = new Set();
+    while ((m = re.exec(clean))) {
+      const base = m[1];
+      if (base === "ns" || base.startsWith("ns.") || seenBases.has(base)) continue;
+      seenBases.add(base);
+      flags.push(
+        `bare property access \`.${name}\` (on \`${base}\`) collides with real ns.* method name \`${name}\` (${cost.toFixed(2)}GB if the game's analyzer charges it - confirmed to happen at least for gang.*, see SKILL.md)`,
+      );
+    }
   }
 
   return flags;
@@ -99,7 +132,7 @@ function extractLocalImportPaths(text, fromFile) {
 // Walks the entry file + all transitively-imported local .ts files, returns a
 // Map of absolute file path -> { refs: Set of ns.* method refs, risks: string[] }
 // found directly in that file.
-function collectFilesAndRefs(entryFile) {
+function collectFilesAndRefs(entryFile, costTable) {
   const refsByFile = new Map();
   const visited = new Set();
   const queue = [path.resolve(entryFile)];
@@ -111,7 +144,7 @@ function collectFilesAndRefs(entryFile) {
     if (!fs.existsSync(abs)) continue; // e.g. an import that only resolves to a .d.ts
 
     const text = fs.readFileSync(abs, "utf8");
-    refsByFile.set(abs, { refs: extractNsRefs(text), risks: extractRiskFlags(text) });
+    refsByFile.set(abs, { refs: extractNsRefs(text), risks: extractRiskFlags(text, costTable) });
 
     for (const imp of extractLocalImportPaths(text, abs)) {
       if (!visited.has(imp)) queue.push(imp);
@@ -123,7 +156,7 @@ function collectFilesAndRefs(entryFile) {
 
 export function auditScript(entryFile, base, costTable) {
   const entryAbs = path.resolve(entryFile);
-  const refsByFile = collectFilesAndRefs(entryAbs);
+  const refsByFile = collectFilesAndRefs(entryAbs, costTable);
 
   const allRefs = new Set();
   const risks = [];
