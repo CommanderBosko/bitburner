@@ -132,10 +132,27 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // exists to prevent, just one level up. Cheap and rare enough (rescan-loop.js's base script cost,
 // and only while it isn't already running) that reserving it unconditionally every tick is
 // negligible.
+//
+// gang-manager.js/company-work-loop.js/hacknet-manager.js/darknet-manager.js need the same
+// reserve for the same reason - confirmed in-game 2026-07-31: hasEnoughHomeRam only gates their
+// launch attempt on home's MAX RAM, not free RAM, so once home is big enough to be eligible,
+// dispatch's own greedy fill (dispatchTarget claims freeRam every tick, same as above) had
+// already claimed effectively 100% of it before main() got down to their ns.run() calls, which
+// then silently returned pid 0 forever - hack.js alone was observed holding 489.6GB while these
+// four managers never appeared in Active Scripts at all. Only reserved once hasEnoughHomeRam
+// passes (a home too small to ever run them shouldn't waste a permanent reservation on RAM they
+// can't use yet) and only per-script while NOT already running, same double-counting guard as
+// rescan-loop.js/server-purchase-manager.js above.
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const rescanLoopReserveGb = ns.isRunning(RESCAN_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(RESCAN_LOOP_SCRIPT, "home");
 	const serverPurchaseManagerReserveGb = ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home") ? 0 : ns.getScriptRam(SERVER_PURCHASE_MANAGER_SCRIPT, "home");
-	return rescanLoopReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb;
+	let lowerPriorityReserveGb = 0;
+	if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
+		for (const script of [GANG_MANAGER_SCRIPT, COMPANY_WORK_LOOP_SCRIPT, HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
+			if (!ns.isRunning(script, "home")) lowerPriorityReserveGb += ns.getScriptRam(script, "home");
+		}
+	}
+	return rescanLoopReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb;
 }
 
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
