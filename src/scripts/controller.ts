@@ -11,7 +11,6 @@ const DARKNET_MANAGER_SCRIPT = "scripts/darknet-manager.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
-const COMPANY_WORK_LOOP_SCRIPT = "scripts/company-work-loop.js";
 const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
 // Consumed by server-purchase-manager.ts to stop buying/upgrading once purchased-server
 // capacity already covers every known target's weaken+grow+hack demand - see
@@ -133,22 +132,22 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // and only while it isn't already running) that reserving it unconditionally every tick is
 // negligible.
 //
-// gang-manager.js/company-work-loop.js/hacknet-manager.js/darknet-manager.js need the same
-// reserve for the same reason - confirmed in-game 2026-07-31: hasEnoughHomeRam only gates their
-// launch attempt on home's MAX RAM, not free RAM, so once home is big enough to be eligible,
-// dispatch's own greedy fill (dispatchTarget claims freeRam every tick, same as above) had
-// already claimed effectively 100% of it before main() got down to their ns.run() calls, which
-// then silently returned pid 0 forever - hack.js alone was observed holding 489.6GB while these
-// four managers never appeared in Active Scripts at all. Only reserved once hasEnoughHomeRam
-// passes (a home too small to ever run them shouldn't waste a permanent reservation on RAM they
-// can't use yet) and only per-script while NOT already running, same double-counting guard as
-// rescan-loop.js/server-purchase-manager.js above.
+// gang-manager.js/hacknet-manager.js/darknet-manager.js need the same reserve for the same
+// reason - confirmed in-game 2026-07-31: hasEnoughHomeRam only gates their launch attempt on
+// home's MAX RAM, not free RAM, so once home is big enough to be eligible, dispatch's own greedy
+// fill (dispatchTarget claims freeRam every tick, same as above) had already claimed effectively
+// 100% of it before main() got down to their ns.run() calls, which then silently returned pid 0
+// forever - hack.js alone was observed holding 489.6GB while these managers never appeared in
+// Active Scripts at all. Only reserved once hasEnoughHomeRam passes (a home too small to ever run
+// them shouldn't waste a permanent reservation on RAM they can't use yet) and only per-script
+// while NOT already running, same double-counting guard as rescan-loop.js/server-purchase-manager.js
+// above.
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const rescanLoopReserveGb = ns.isRunning(RESCAN_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(RESCAN_LOOP_SCRIPT, "home");
 	const serverPurchaseManagerReserveGb = ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home") ? 0 : ns.getScriptRam(SERVER_PURCHASE_MANAGER_SCRIPT, "home");
 	let lowerPriorityReserveGb = 0;
 	if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
-		for (const script of [GANG_MANAGER_SCRIPT, COMPANY_WORK_LOOP_SCRIPT, HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
+		for (const script of [GANG_MANAGER_SCRIPT, HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
 			if (!ns.isRunning(script, "home")) lowerPriorityReserveGb += ns.getScriptRam(script, "home");
 		}
 	}
@@ -647,10 +646,9 @@ export async function main(ns: NS): Promise<void> {
 
 	// scan-loop (scan-root.js/rescan-loop.js), controller.js (this script), and the
 	// weaken/grow/hack dispatch below are the three must-run priorities. Every other manager
-	// (hacknet-manager.js, darknet-manager.js, server-purchase-manager.js, company-work-loop.js,
-	// gang-manager.js) is launched only from inside the dispatch loop, after each tick's dispatch
-	// has already claimed its RAM - see the loop below - so none of them can starve actual
-	// hacking.
+	// (hacknet-manager.js, darknet-manager.js, server-purchase-manager.js, gang-manager.js) is
+	// launched only from inside the dispatch loop, after each tick's dispatch has already claimed
+	// its RAM - see the loop below - so none of them can starve actual hacking.
 
 	// server-tree.js is deliberately NOT chain-launched (run it by hand when wanted), but its
 	// RAM still needs holding open so launching it later never has to wait on a batch to free up
@@ -860,19 +858,21 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
-		// hacknet-manager.js/darknet-manager.js/company-work-loop.js/gang-manager.js still wait
-		// for home RAM to clear the threshold before even attempting to launch, so they can never
-		// compete with scan-loop/controller/weaken-grow-hack (or server-purchase-manager.js) for
-		// RAM while home is this tight. Moved here from rescan-loop.js (2026-07-30) - they were
-		// never actually about rescanning, just riding along on rescan-loop.js's always-alive
-		// loop; controller.js's own dispatch-loop tick is the natural home for every lower-priority
-		// manager launch. backdoor-loop.js is NOT included here (removed 2026-07-31): both
+		// hacknet-manager.js/darknet-manager.js/gang-manager.js still wait for home RAM to clear
+		// the threshold before even attempting to launch, so they can never compete with
+		// scan-loop/controller/weaken-grow-hack (or server-purchase-manager.js) for RAM while home
+		// is this tight. Moved here from rescan-loop.js (2026-07-30) - they were never actually
+		// about rescanning, just riding along on rescan-loop.js's always-alive loop; controller.js's
+		// own dispatch-loop tick is the natural home for every lower-priority manager launch.
+		// backdoor-loop.js is NOT included here (removed 2026-07-31): both
 		// singularity.installBackdoor and singularity.connect require Source-File 4 outside
 		// BitNode 4 - same hard gate confirmed for singularity.upgradeHomeRam/upgradeHomeCores
-		// (see the home-upgrade-loop.js comment above) - so it can't do anything useful yet. Run
-		// it by hand later, once SF4 is owned.
+		// (see the home-upgrade-loop.js comment above) - so it can't do anything useful yet.
+		// company-work-loop.js is likewise excluded (removed 2026-07-31): confirmed in-game that
+		// ns.singularity.applyToCompany/workForCompany also hard-error without SF4, same gate as
+		// the other singularity.* calls above. Run both by hand later, once SF4 is owned.
 		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
-			for (const lowerPriorityScript of [GANG_MANAGER_SCRIPT, COMPANY_WORK_LOOP_SCRIPT, HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
+			for (const lowerPriorityScript of [GANG_MANAGER_SCRIPT, HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
 				if (ns.isRunning(lowerPriorityScript, "home")) continue;
 				const pid = ns.run(lowerPriorityScript);
 				if (pid === 0) {
