@@ -8,7 +8,7 @@ Before you do any work, use the `/interview` skill to pin down the real goal wit
 
 ## Verification Plan
 
-Before you do any work, state how you'll verify it with the `/verify` skill — say up front how you'll confirm each part actually works before calling it done. Pick the checks that fit this project (build, test suite, linter, type-check, running the app, hitting the endpoint, reading the logs) and name the specific commands. Lay out the plan with the work, not after it.
+Before you do any work, state how you'll verify it, following the same approach as the `/verify` skill — say up front how you'll confirm each part actually works before calling it done. `/verify` is user-invoked only (it cannot be called via the Skill tool), so apply its method in prose rather than trying to invoke it. Pick the checks that fit this project (build, test suite, linter, type-check, running the app, hitting the endpoint, reading the logs) and name the specific commands. Lay out the plan with the work, not after it.
 
 ## Parallelize with Sub-Agents
 
