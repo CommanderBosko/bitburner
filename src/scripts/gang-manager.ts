@@ -27,6 +27,10 @@ const WARFARE_ENGAGE_WIN_CHANCE = 0.65;
 // Hysteresis: only disengage once win chance drops meaningfully below the engage threshold,
 // so a single noisy reading doesn't flip territory warfare on/off every tick.
 const WARFARE_DISENGAGE_WIN_CHANCE = 0.55;
+// A gang's founding faction (Slum Snakes) needs no separate faction work - its Reputation
+// counter (Factions -> Slum Snakes -> Augmentations) is driven directly by gang respect. Once
+// respect crosses this bar, stop grinding respect for augmentation unlocks and earn money instead.
+const EARN_MONEY_REPUTATION_THRESHOLD = 3_500_000;
 
 function tryFoundGang(ns: NS): void {
 	if (ns.gang.inGang()) return;
@@ -144,7 +148,7 @@ function pickEarnTask(
 function assignTask(ns: NS, member: GangMember, isHacking: boolean, tasks: GangTask[], info: GangInfo): void {
 	// Bracket notation, not info.respectForNextRecruit: collides with the real (and separately
 	// costed) ns.gang.respectForNextRecruit() - see the `.hack` collision note above.
-	const wantRespect = info.respect < info["respectForNextRecruit"];
+	const wantRespect = info.respect < EARN_MONEY_REPUTATION_THRESHOLD && info.respect < info["respectForNextRecruit"];
 	const stillTraining = primaryAscMult(member, isHacking) < EARN_ASC_MULT_TARGET;
 
 	const target =
