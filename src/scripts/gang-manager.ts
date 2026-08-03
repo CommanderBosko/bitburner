@@ -27,10 +27,16 @@ const WARFARE_ENGAGE_WIN_CHANCE = 0.65;
 // Hysteresis: only disengage once win chance drops meaningfully below the engage threshold,
 // so a single noisy reading doesn't flip territory warfare on/off every tick.
 const WARFARE_DISENGAGE_WIN_CHANCE = 0.55;
-// A gang's founding faction (Slum Snakes) needs no separate faction work - its Reputation
-// counter (Factions -> Slum Snakes -> Augmentations) is driven directly by gang respect. Once
-// respect crosses this bar, stop grinding respect for augmentation unlocks and earn money instead.
-const EARN_MONEY_REPUTATION_THRESHOLD = 3_500_000;
+// Gang respect converts to the founding faction's (Slum Snakes) reputation at a fixed 75:1 ratio
+// (game source: GangConstants.GangRespectToReputationRatio), so this reputation target is tracked
+// via respect instead. That's an approximation - it ignores the faction-rep/favor multipliers
+// folded into the live number - but reading exact reputation needs ns.singularity.getFactionRep,
+// which costs +16GB static RAM (no SF4 owned) and this script deliberately avoids Singularity for
+// that reason (see the GANG_FACTION comment above). Once respect crosses the equivalent threshold,
+// stop grinding respect for augmentation unlocks and earn money instead.
+const TARGET_FACTION_REPUTATION = 3_500_000;
+const GANG_RESPECT_TO_REPUTATION_RATIO = 75;
+const EARN_MONEY_RESPECT_THRESHOLD = TARGET_FACTION_REPUTATION * GANG_RESPECT_TO_REPUTATION_RATIO;
 
 function tryFoundGang(ns: NS): void {
 	if (ns.gang.inGang()) return;
@@ -148,7 +154,7 @@ function pickEarnTask(
 function assignTask(ns: NS, member: GangMember, isHacking: boolean, tasks: GangTask[], info: GangInfo): void {
 	// Bracket notation, not info.respectForNextRecruit: collides with the real (and separately
 	// costed) ns.gang.respectForNextRecruit() - see the `.hack` collision note above.
-	const wantRespect = info.respect < EARN_MONEY_REPUTATION_THRESHOLD && info.respect < info["respectForNextRecruit"];
+	const wantRespect = info.respect < EARN_MONEY_RESPECT_THRESHOLD && info.respect < info["respectForNextRecruit"];
 	const stillTraining = primaryAscMult(member, isHacking) < EARN_ASC_MULT_TARGET;
 
 	const target =
