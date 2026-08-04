@@ -191,7 +191,12 @@ function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 			if (!ns.isRunning(script, "home")) lowerPriorityReserveGb += ns.getScriptRam(script, "home");
 		}
 	}
-	return rescanLoopReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb + computeCorpReserveGb(ns);
+	// computeCorpReserveGb(ns) intentionally dropped from this sum (2026-08-04): corp automation
+	// paused while playing BN5 - flumed out of BN3 pre-augment via b1t_flum3.exe, see
+	// [[bitburner_bitnode_route]] memory. No point reserving RAM for a manager that isn't launched
+	// below anymore. Re-add `+ computeCorpReserveGb(ns)` here when the corp-manager.js launch block
+	// in main() (search CORP_MANAGER_SCRIPT) is re-enabled on returning to BN3.
+	return rescanLoopReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb;
 }
 
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
@@ -876,18 +881,23 @@ export async function main(ns: NS): Promise<void> {
 		// just an inflated cost. Since SF4 is only granted by completing BitNode 4, this script can't
 		// run yet regardless of home RAM or free capacity. Run it by hand later, once SF4 is owned.
 
+		// corp-manager.js: PAUSED (2026-08-04) - abandoned BN3 pre-augment via b1t_flum3.exe to run
+		// BN5 first (Intelligence/Formulas.exe), see [[bitburner_bitnode_route]]. BN3's corp has
+		// nothing to do while out of that BitNode. Re-enable by uncommenting this block (and the
+		// matching `+ computeCorpReserveGb(ns)` term in currentReserveGb above) once BN3 is resumed.
+		//
 		// corp-manager.js launches unconditionally once rescan-loop.js is up - no
 		// hasEnoughHomeRam gate, unlike server-purchase-manager.js/gang-manager.js/
 		// hacknet-manager.js/darknet-manager.js below. Corp automation is meant to supersede
 		// hacking for home RAM (user-directed, see project-state.md's Recent Decisions), so it
 		// shouldn't wait behind the same lower-priority threshold those managers use - its
 		// reservation is capped instead (see computeCorpReserveGb above).
-		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home") && !ns.isRunning(CORP_MANAGER_SCRIPT, "home")) {
-			const pid = ns.run(CORP_MANAGER_SCRIPT);
-			if (pid === 0) {
-				ns.print(`controller: still waiting for RAM to start ${CORP_MANAGER_SCRIPT}`);
-			}
-		}
+		// if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home") && !ns.isRunning(CORP_MANAGER_SCRIPT, "home")) {
+		// 	const pid = ns.run(CORP_MANAGER_SCRIPT);
+		// 	if (pid === 0) {
+		// 		ns.print(`controller: still waiting for RAM to start ${CORP_MANAGER_SCRIPT}`);
+		// 	}
+		// }
 
 		// server-purchase-manager.js's first launch attempt used to race scan-root.js's own
 		// boot-time launch of rescan-loop.js: controller.js starts running (and hits this block on
