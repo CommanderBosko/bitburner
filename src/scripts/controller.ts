@@ -12,6 +12,31 @@ const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
 const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
+const CORP_MANAGER_SCRIPT = "scripts/corp-manager.js";
+// All 16 corp-agent-*.js workers corp-manager.js can dispatch - see computeCorpReserveGb below.
+const CORP_WORKER_SCRIPTS = [
+	"scripts/corp-agent-create.js",
+	"scripts/corp-agent-status-corp.js",
+	"scripts/corp-agent-check-unlocks.js",
+	"scripts/corp-agent-buy-unlock.js",
+	"scripts/corp-agent-found-division.js",
+	"scripts/corp-agent-industry-data.js",
+	"scripts/corp-agent-expand-city.js",
+	"scripts/corp-agent-purchase-warehouse.js",
+	"scripts/corp-agent-enable-smart-supply.js",
+	"scripts/corp-agent-staff-office.js",
+	"scripts/corp-agent-status-offices.js",
+	"scripts/corp-agent-status-warehouses.js",
+	"scripts/corp-agent-status-materials.js",
+	"scripts/corp-agent-setup-sell.js",
+	"scripts/corp-agent-buy-tea.js",
+	"scripts/corp-agent-throw-party.js",
+];
+// Corp automation supersedes hacking for home RAM (user-directed), but capped rather than an
+// on/off gate - this repo has a 6-session history of exactly the uncapped-reservation
+// RAM-starvation failure shape (see project-state.md's Historical section), so the reservation
+// must never be able to starve weaken/grow/hack to literal zero forever.
+const CORP_RAM_RESERVE_FRACTION = 0.5;
 // Consumed by server-purchase-manager.ts to stop buying/upgrading once purchased-server
 // capacity already covers every known target's weaken+grow+hack demand - see
 // estimateTargetDemandGb for what "demand" means here.
@@ -142,6 +167,21 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // them shouldn't waste a permanent reservation on RAM they can't use yet) and only per-script
 // while NOT already running, same double-counting guard as rescan-loop.js/server-purchase-manager.js
 // above.
+// Reserve corp-manager.js's own resident cost plus headroom for the single largest
+// corp-agent-*.js worker it might dispatch at any one time (it only ever dispatches one worker
+// per corp-state tick - see corp-manager.ts). Capped at CORP_RAM_RESERVE_FRACTION of home's own
+// max RAM so corp heavily deprioritizes weaken/grow/hack without starving it to literal zero
+// forever - same failure class this file already hit and fixed for
+// gang/hacknet/darknet/server-purchase-manager above. Reserved unconditionally (no
+// hasEnoughHomeRam gate) - corp is meant to supersede hacking, not wait behind the same
+// lower-priority threshold those managers use.
+function computeCorpReserveGb(ns: NS): number {
+	const managerCostGb = ns.isRunning(CORP_MANAGER_SCRIPT, "home") ? 0 : ns.getScriptRam(CORP_MANAGER_SCRIPT, "home");
+	const largestWorkerCostGb = Math.max(0, ...CORP_WORKER_SCRIPTS.map((s) => ns.getScriptRam(s, "home")));
+	const measuredNeedGb = managerCostGb + largestWorkerCostGb;
+	return Math.min(measuredNeedGb, ns.getServerMaxRam("home") * CORP_RAM_RESERVE_FRACTION);
+}
+
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const rescanLoopReserveGb = ns.isRunning(RESCAN_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(RESCAN_LOOP_SCRIPT, "home");
 	const serverPurchaseManagerReserveGb = ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home") ? 0 : ns.getScriptRam(SERVER_PURCHASE_MANAGER_SCRIPT, "home");
@@ -151,7 +191,7 @@ function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 			if (!ns.isRunning(script, "home")) lowerPriorityReserveGb += ns.getScriptRam(script, "home");
 		}
 	}
-	return rescanLoopReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb;
+	return rescanLoopReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb + computeCorpReserveGb(ns);
 }
 
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
@@ -835,6 +875,19 @@ export async function main(ns: NS): Promise<void> {
 		// comments), and upgradeHomeRam additionally errors outright without owning SF4 at all - not
 		// just an inflated cost. Since SF4 is only granted by completing BitNode 4, this script can't
 		// run yet regardless of home RAM or free capacity. Run it by hand later, once SF4 is owned.
+
+		// corp-manager.js launches unconditionally once rescan-loop.js is up - no
+		// hasEnoughHomeRam gate, unlike server-purchase-manager.js/gang-manager.js/
+		// hacknet-manager.js/darknet-manager.js below. Corp automation is meant to supersede
+		// hacking for home RAM (user-directed, see project-state.md's Recent Decisions), so it
+		// shouldn't wait behind the same lower-priority threshold those managers use - its
+		// reservation is capped instead (see computeCorpReserveGb above).
+		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home") && !ns.isRunning(CORP_MANAGER_SCRIPT, "home")) {
+			const pid = ns.run(CORP_MANAGER_SCRIPT);
+			if (pid === 0) {
+				ns.print(`controller: still waiting for RAM to start ${CORP_MANAGER_SCRIPT}`);
+			}
+		}
 
 		// server-purchase-manager.js's first launch attempt used to race scan-root.js's own
 		// boot-time launch of rescan-loop.js: controller.js starts running (and hits this block on

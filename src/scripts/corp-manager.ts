@@ -1,7 +1,7 @@
 import type { NS } from "../NetscriptDefinitions";
 import type { CorpCoreReport, CorpUnlocksReport, CorpOfficeReport, CorpWarehouseReport, CorpIndustryReport, CorpMaterialReport } from "../lib/types";
 import type { StaffingTask, CityName } from "../lib/corp-constants";
-import { ALL_CITIES, OFFICE_ROLES } from "../lib/corp-constants";
+import { ALL_CITIES, OFFICE_ROLES, MORALE_ENERGY_THRESHOLD_FRACTION } from "../lib/corp-constants";
 
 const CORP_AGENT_CREATE_SCRIPT = "scripts/corp-agent-create.js";
 const STATUS_CORP_SCRIPT = "scripts/corp-agent-status-corp.js";
@@ -17,6 +17,8 @@ const ENABLE_SMART_SUPPLY_SCRIPT = "scripts/corp-agent-enable-smart-supply.js";
 const STAFF_OFFICE_SCRIPT = "scripts/corp-agent-staff-office.js";
 const STATUS_MATERIALS_SCRIPT = "scripts/corp-agent-status-materials.js";
 const SETUP_SELL_SCRIPT = "scripts/corp-agent-setup-sell.js";
+const BUY_TEA_SCRIPT = "scripts/corp-agent-buy-tea.js";
+const THROW_PARTY_SCRIPT = "scripts/corp-agent-throw-party.js";
 
 // Kept in sync by hand with corp-agent-create.ts's identical constant - see that file's comment.
 const CORP_BLOCKED_FLAG_PATH = "/data/corp-blocked.json";
@@ -92,10 +94,10 @@ function dispatchWriteAction(ns: NS, script: string, invalidatePath: string, ...
 	return dispatched;
 }
 
-// STEP 5 of the build plan (see /home/bosko/.claude/plans/joyful-tickling-nygaard.md): unlocks,
-// division/industry-data, city expansion, and warehouses+smart supply. Later steps add more
-// cases to the decision queue below (staffing, materials, morale) - not yet wired into
-// controller.ts's chain-launch. Run by hand for now.
+// Build plan (see /home/bosko/.claude/plans/joyful-tickling-nygaard.md), Steps 1-8 of 9 now in
+// the decision queue below: unlocks, division/industry-data, city expansion,
+// warehouses+smart supply, staffing, sell orders, and morale/energy steady state. Only Step 9
+// (wiring into controller.ts's RAM reservation + chain-launch) remains - run by hand for now.
 export async function main(ns: NS): Promise<void> {
 	ns.disableLog("ALL");
 	ns.print("corp-manager: starting");
@@ -236,14 +238,36 @@ export async function main(ns: NS): Promise<void> {
 			continue;
 		}
 
-		// TODO(build plan step 8+): morale/energy steady state - adds another branch here once
-		// its corp-agent-*.ts workers exist. warehouseFundsShortfall (set above, still in scope)
-		// means the queue got this far without dispatching anything only because the warehouse
-		// purchase is funds-blocked, not because everything's actually done.
+		// STEP 8: morale/energy steady state. Reuses the `offices` report already fetched above
+		// for staffing (still fresh under OFFICES_REFRESH_MS) rather than a separate
+		// STEADY_STATE_REFRESH_CYCLES tick-counter as the plan sketched - this file's existing
+		// staleness-gated-report mechanism already bounds dispatch frequency the same way, with no
+		// new state needed. dispatchWriteAction invalidates CORP_OFFICES_PATH on a successful
+		// dispatch, so the next tick re-fetches real energy/morale before acting again - same
+		// re-verify-before-repeat protection every other write action in this queue already gets.
+		const citiesNeedingTea = offices.offices
+			.filter((o) => o.avgEnergyFraction < MORALE_ENERGY_THRESHOLD_FRACTION)
+			.map((o) => o.city as CityName);
+		if (citiesNeedingTea.length > 0) {
+			dispatchWriteAction(ns, BUY_TEA_SCRIPT, CORP_OFFICES_PATH, JSON.stringify(citiesNeedingTea));
+			continue;
+		}
+
+		const citiesNeedingParty = offices.offices
+			.filter((o) => o.avgMoraleFraction < MORALE_ENERGY_THRESHOLD_FRACTION)
+			.map((o) => o.city as CityName);
+		if (citiesNeedingParty.length > 0) {
+			dispatchWriteAction(ns, THROW_PARTY_SCRIPT, CORP_OFFICES_PATH, JSON.stringify(citiesNeedingParty));
+			continue;
+		}
+
+		// warehouseFundsShortfall (set above, still in scope) means the queue got this far without
+		// dispatching anything only because the warehouse purchase is funds-blocked, not because
+		// everything's actually done.
 		const idleMessage =
 			warehouseFundsShortfall !== undefined
 				? `corp-manager: waiting on ~$${warehouseFundsShortfall.toFixed(0)} more funds for ${citiesMissingWarehouse.length} remaining warehouse(s) - everything else caught up`
-				: "corp-manager: cities expanded+warehoused+staffed+selling - nothing else built yet (build plan step 7 stops here)";
+				: "corp-manager: cities expanded+warehoused+staffed+selling+morale-steady - nothing else built yet (build plan step 8 stops here)";
 		if (idleMessage !== lastIdleMessage) {
 			ns.print(idleMessage);
 			lastIdleMessage = idleMessage;
