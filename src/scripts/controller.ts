@@ -934,12 +934,29 @@ export async function main(ns: NS): Promise<void> {
 		// company-work-loop.js is likewise excluded (removed 2026-07-31): confirmed in-game that
 		// ns.singularity.applyToCompany/workForCompany also hard-error without SF4, same gate as
 		// the other singularity.* calls above. Run both by hand later, once SF4 is owned.
+		//
+		// gang-manager.js gets a real (not just attempt-order) priority over hacknet/darknet
+		// (2026-08-04, user-directed): hacknet-manager.js/darknet-manager.js are only even
+		// attempted once gang-manager.js is confirmed running. Attempt-order alone wasn't enough -
+		// gang-manager.js is tried first each tick, but ns.run() checks real free home RAM
+		// independently, so when free RAM was too small for gang's 36.10GB but big enough for
+		// hacknet+darknet's combined 10.6GB, they'd launch anyway on the same tick and then sit
+		// resident permanently, locking in RAM gang needed. Gating their attempt on gang already
+		// being alive means they can never again grab RAM out from under it - confirmed via
+		// [[bitburner_bitnode_route]]'s SF2 note that gang is meant to be live in this BitNode.
 		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
-			for (const lowerPriorityScript of [GANG_MANAGER_SCRIPT, HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
-				if (ns.isRunning(lowerPriorityScript, "home")) continue;
-				const pid = ns.run(lowerPriorityScript);
+			if (!ns.isRunning(GANG_MANAGER_SCRIPT, "home")) {
+				const pid = ns.run(GANG_MANAGER_SCRIPT);
 				if (pid === 0) {
-					ns.print(`controller: still waiting for RAM to start ${lowerPriorityScript}`);
+					ns.print(`controller: still waiting for RAM to start ${GANG_MANAGER_SCRIPT}`);
+				}
+			} else {
+				for (const lowerPriorityScript of [HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
+					if (ns.isRunning(lowerPriorityScript, "home")) continue;
+					const pid = ns.run(lowerPriorityScript);
+					if (pid === 0) {
+						ns.print(`controller: still waiting for RAM to start ${lowerPriorityScript}`);
+					}
 				}
 			}
 		}
