@@ -16,6 +16,83 @@ export interface RamDemandReport {
 	writtenAt: number;
 }
 
+// Corp report types, written by the corp-agent-status-*.ts / corp-agent-check-unlocks.ts
+// worker scripts and read by corp-manager.ts (see src/lib/corp-constants.ts for the shared
+// corp constants/types these pair with). City/material/unlock names are kept as plain string
+// here rather than importing corp-constants.ts's derived types - matches this file's existing
+// style of plain primitives (e.g. ServerReport.hostname), and avoids status-reader code needing
+// to import corp-only types just to read a report.
+export interface CorpCoreReport {
+	name: string;
+	funds: number;
+	revenue: number;
+	expenses: number;
+	divisionExists: boolean;
+	cities: string[];
+	makesProducts: boolean;
+	researchPoints: number;
+	writtenAt: number;
+}
+
+export interface CorpUnlocksReport {
+	missing: string[];
+	writtenAt: number;
+}
+
+// Cached forever once written - the industry-type-level static data (required/produced
+// materials) doesn't change once fetched, unlike the other corp-agent-status-*.ts reports.
+export interface CorpIndustryReport {
+	requiredMaterials: string[];
+	producedMaterials: string[];
+	makesMaterials: boolean;
+	makesProducts: boolean;
+	writtenAt: number;
+}
+
+export interface CorpOfficeStatus {
+	city: string;
+	numEmployees: number;
+	employeeJobs: Record<string, number>;
+	avgEnergyFraction: number;
+	avgMoraleFraction: number;
+}
+
+export interface CorpOfficeReport {
+	offices: CorpOfficeStatus[];
+	writtenAt: number;
+}
+
+export interface CorpWarehouseStatus {
+	city: string;
+	// Named warehouseExists, not hasWarehouse: confirmed live (2026-08-03) that the bare
+	// property name "hasWarehouse" gets phantom-charged 10GB by the game's static RAM analyzer
+	// in any file that merely reads it (e.g. `w.hasWarehouse` in corp-manager.ts), even with zero
+	// real ns.corporation.hasWarehouse() calls - it collides with that method's exact name. Same
+	// bug class as lib/launch.ts's attemptIndex rename (see [[bitburner_ram_analyzer_bugs]]).
+	warehouseExists: boolean;
+	smartSupplyEnabled: boolean;
+	sizeUsed: number;
+	size: number;
+}
+
+export interface CorpWarehouseReport {
+	warehouses: CorpWarehouseStatus[];
+	writtenAt: number;
+}
+
+export interface CorpMaterialStatus {
+	city: string;
+	material: string;
+	stored: number;
+	actualSellAmount: number;
+	desiredSellAmount: string | number;
+}
+
+export interface CorpMaterialReport {
+	materials: CorpMaterialStatus[];
+	writtenAt: number;
+}
+
 export type DarknetServerStatus = "probed" | "cracking" | "cracked" | "unresolvable";
 
 export interface CrackCandidate {
