@@ -11,6 +11,7 @@ const DARKNET_MANAGER_SCRIPT = "scripts/darknet-manager.js";
 const SERVER_PURCHASE_MANAGER_SCRIPT = "scripts/server-purchase-manager.js";
 const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
+const SCAN_ROOT_SCRIPT = "scripts/scan-root.js";
 const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
 // CORP_MANAGER_SCRIPT/CORP_WORKER_SCRIPTS/CORP_RAM_RESERVE_FRACTION: PAUSED (2026-08-06) along
 // with computeCorpReserveGb and the corp-manager.js launch block below - commented out (not
@@ -161,6 +162,19 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // and only while it isn't already running) that reserving it unconditionally every tick is
 // negligible.
 //
+// scan-root.js needs its own reserve too, and for a subtly different reason than the two above:
+// it's not a persistent process with a watchdog, it's the thing rescan-loop.js's while(true) loop
+// spawns fresh every ~30s (see rescan-loop.ts) while rescan-loop.js itself stays alive the whole
+// time - so ns.isRunning(RESCAN_LOOP_SCRIPT) is true almost always, and its own reserve above is
+// almost always 0 by the double-counting guard. Nothing was reserving room for that recurring
+// child spawn. Confirmed in-game 2026-08-06: rescan-loop.js's tail showed "Cannot run
+// scripts/scan-root.js... requires 3.80GB" on ~4 of every 5 attempts, succeeding only in the rare
+// tick where dispatch hadn't yet reclaimed freed RAM - which silently starved scan-root.js's
+// tryRoot() pass across the whole network, leaving newly-rootable hosts stuck showing [locked] in
+// server-tree.js indefinitely even with every port opener owned and hacking level irrelevant to
+// root access. Same isRunning guard as the others: reserve only while it isn't currently the one
+// occupying that RAM.
+//
 // gang-manager.js/hacknet-manager.js/darknet-manager.js need the same reserve for the same
 // reason - confirmed in-game 2026-07-31: hasEnoughHomeRam only gates their launch attempt on
 // home's MAX RAM, not free RAM, so once home is big enough to be eligible, dispatch's own greedy
@@ -192,6 +206,7 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const rescanLoopReserveGb = ns.isRunning(RESCAN_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(RESCAN_LOOP_SCRIPT, "home");
+	const scanRootReserveGb = ns.isRunning(SCAN_ROOT_SCRIPT, "home") ? 0 : ns.getScriptRam(SCAN_ROOT_SCRIPT, "home");
 	const serverPurchaseManagerReserveGb = ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home") ? 0 : ns.getScriptRam(SERVER_PURCHASE_MANAGER_SCRIPT, "home");
 	let lowerPriorityReserveGb = 0;
 	if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
@@ -204,7 +219,7 @@ function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	// [[bitburner_bitnode_route]] memory. No point reserving RAM for a manager that isn't launched
 	// below anymore. Re-add `+ computeCorpReserveGb(ns)` here when the corp-manager.js launch block
 	// in main() (search CORP_MANAGER_SCRIPT) is re-enabled on returning to BN3.
-	return rescanLoopReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb;
+	return rescanLoopReserveGb + scanRootReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb;
 }
 
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
