@@ -1,6 +1,6 @@
 # Project State
 
-_Last updated: 2026-08-04 (night)_
+_Last updated: 2026-08-06_
 
 ## Current Project State
 
@@ -55,6 +55,16 @@ Scoped via a full `/interview` (Project Brief confirmed, independently reviewed 
 
 ---
 
+### 2026-08-06: `home-upgrade-loop.ts` split + a second RAM-starvation bug found and fixed (`scan-root.js`) — both confirmed live
+
+Two independent fixes, no BitNode/architecture change — still BN5 (Intelligence), corp still paused per the pivot above.
+
+**Split `home-upgrade-loop.ts` into `home-ram-loop.ts`/`home-cores-loop.ts`** (`fd2e9df`) — each now loops a single `singularity.upgradeHomeRam()`/`upgradeHomeCores()` call instead of both combined, so a manual run only pays RAM for the one upgrade actually wanted (roughly half the old script's confirmed 99.65GB combined cost — see `[[bitburner_singularity_locked]]`). Neither is chain-launched (both still hard-require SF4, unavailable this save) — purely a manual-run RAM-efficiency improvement. Side effect: `computeCorpReserveGb` (plus its supporting `CORP_MANAGER_SCRIPT`/`CORP_WORKER_SCRIPTS`/`CORP_RAM_RESERVE_FRACTION` constants) had gone fully unused once the corp launch block was commented out during the BN3→BN5 pivot — commented out under the same `PAUSED (2026-08-06)` marker so it re-enables in one place alongside the launch block when BN3 resumes.
+
+**Diagnosed and fixed a second, distinct RAM-starvation bug: `scan-root.js`** (`67f3328`) — user reported many hosts stuck `[locked]` in `server-tree.js` despite owning all 5 port openers (confirmed present on home) and sufficient hacking level (irrelevant to root access anyway; only ports gate `ns.nuke`). Root cause: `controller.ts`'s `currentReserveGb()` reserved RAM for every *persistent* manager's own launch (rescan-loop, server-purchase-manager, gang/hacknet/darknet), but never for `scan-root.js` — the transient 3.80GB script `rescan-loop.js` spawns fresh every ~30s while staying resident itself, so `rescan-loop.js`'s own reserve term was always zeroed by the existing double-counting guard and nothing covered the recurring child spawn. Dispatch's greedy weaken/grow/hack RAM claim left ~0 free almost every tick, so the spawn silently failed ~4/5 cycles — confirmed live via `tail rescan-loop.js` showing repeated "Cannot run scripts/scan-root.js... requires 3.80GB." **Fix:** added a `scanRootReserveGb` term to `currentReserveGb()`, same `isRunning`-gated pattern as the other reserves. **Confirmed fixed in-game the same session** — user reported the RAM-failure spam stopped after the fix synced ("that fixed it"). See `[[bitburner_scan_root_ram_starvation]]`, cross-linked with the sibling `[[bitburner_corp_hacknet_ram_squeeze]]` fix — same bug class (greedy dispatch starving a lower-priority script of home RAM), different code path: that one covered a persistent manager's own resident cost, this one covers a persistent loop's *transient child spawn*.
+
+---
+
 **Historical (BitNode 4, superseded — save is no longer in this BitNode):** a 6-session, 6-root-cause "$0/pitiful scripted income" saga on the fresh-BN4 hacking chain, fully resolved (confirmed live: `hack.js` running, money climbing) before the save moved on. Root causes in order found: `buildWorkingSet`'s debit-by-`needed`/`break`-vs-`continue` bug (`c344ad9`) → purchased-server RAM fragmentation from a buy/upgrade tie (`f2ccfc8`) → `rescan-loop.js` dying with nothing to relaunch it (`7c666e0` watchdog) → `buildWorkingSet`'s 1-thread admission bar diluting a small fleet too thin (`20a2872`) → one due target's uncapped grow request starving every other target each tick (`75bae6a`) → fleet-growth managers themselves starved of RAM plus three more stacked dispatch bugs (`47b60fe`). Also built: self-learning `ns.dnet` darknet automation, `bitnodes.md`/`jobs.md`/`singularity-roadmap.md` research docs, and the RAM-priority gating system (`hasEnoughHomeRam`, 64GB threshold) this session's BN3 work extends. Full detail recoverable from prior commit history / `session-summary-archive.md` if BN4 is ever replayed to actually clear it to SF4.3.
 
 ## Current Goals
@@ -62,6 +72,7 @@ Scoped via a full `/interview` (Project Brief confirmed, independently reviewed 
 **Immediate (next session, top priority):**
 - **BN5 is "just play normally"** — no dedicated script work needed per `[[bitburner_bn5_intelligence]]`: keep the existing hacking automation running toward destroying `w0r1d_d43m0n` for real (not flume), let `gang-manager.js` keep doing its thing now that it can actually launch. If `SQLInject.exe` isn't bought/built yet, building it (not buying) is the best *active* Intelligence-XP lever available (~2,800 XP), though buying it is a totally fine default.
 - Keep an eye on `gang-manager.js` across a real restart (not just the manual kill-nudge that proved the fix) to confirm the priority fix holds up unattended long-term, not just once.
+- Same caution now applies to the new `scan-root.js` reserve (2026-08-06, `67f3328`) — confirmed fixed in-session, but not yet watched across a full cold restart with no manual nudge.
 
 **Short-term:**
 - Once `gang-manager.js` has run a while, re-check whether `hacknet-manager.js`/`darknet-manager.js` are getting real leftover RAM now that corp's reservation is gone (paused) — the squeeze in `[[bitburner_corp_hacknet_ram_squeeze]]` was gang-caused, not corp-caused, so it may still recur even without corp in the mix.
@@ -84,10 +95,13 @@ Scoped via a full `/interview` (Project Brief confirmed, independently reviewed 
 - **Didn't stop at "the UI looks right" for Step 7/9 — traced each claim to a structural code-path or `mem`/`ps`/`free` reading** — e.g. Step 7's confirmation came from `needsSellSetup`'s exact evaluation requirement, not just eyeballing the Sell column; the hacknet-manager.js RAM squeeze was traced with real arithmetic (pre-corp vs. post-corp headroom) rather than assumed to be caused by the just-shipped change. Same `[[feedback_verify_ingame_before_declaring_fixed]]` discipline, applied to a "is this my bug or pre-existing" question rather than a plain pass/fail.
 - **Paused BN3 by commenting out corp's launch block, not deleting it** (2026-08-04 night) — the whole 9-step build is done and shouldn't need re-deriving when BN3 is resumed; a one-line uncomment (plus the matching reserve term) is the entire re-enable cost.
 - **Gave `gang-manager.js` a real priority gate over `hacknet-manager.js`/`darknet-manager.js`, not just first-in-list attempt order** (2026-08-04 night, user-directed) — attempt-order alone let the two smaller managers launch on RAM the larger one couldn't use yet, then squat on it permanently once resident. Gating their attempt on `gang-manager.js` already running closes that race structurally, at the cost of hacknet/darknet start-up being delayed behind gang whenever RAM is tight (accepted trade-off, matches the user's explicit priority ordering).
+- **Split `home-upgrade-loop.ts` into two single-purpose scripts rather than adding a mode flag** (2026-08-06) — a manual run of just RAM or just cores now only pays that one call's RAM cost instead of the combined script's ~99.65GB; matches this repo's existing convention (`hack.js`/`grow.js`/`weaken.js`) of one script per single `ns.*` action rather than a flag-branched multi-purpose file.
+- **Reserved home RAM for `scan-root.js`'s transient spawn with the same `isRunning`-gated pattern already used for persistent managers, not a fixed always-on reserve** (2026-08-06) — consistent with every other entry in `currentReserveGb()`, and cheaper: the reserve only actually holds RAM back while `rescan-loop.js` is alive and would be spawning it, not permanently.
 
 ## Known Issues / Tech Debt
 
 - **`gang-manager.js`-vs-`hacknet-manager.js`/`darknet-manager.js` RAM squeeze — real priority fix live, long-term durability not yet proven unattended.** `[[bitburner_corp_hacknet_ram_squeeze]]`: `gang-manager.js` alone is 36.10GB, over half of a 64GB home. The 2026-08-04 night fix (`9a44b97`) gates hacknet/darknet's launch *attempt* on gang already running, and a one-time manual kill of the already-resident hacknet/darknet let gang claim their RAM — user-confirmed working once. Not yet confirmed to self-heal correctly across a full cold restart with no manual nudge.
+- **`scan-root.js` RAM-starvation fix (2026-08-06, `67f3328`) — confirmed fixed in-session, same "not yet proven across a cold restart" caveat as the gang-manager fix above.** `[[bitburner_scan_root_ram_starvation]]`: user watched `tail rescan-loop.js` go from constant "Cannot run scripts/scan-root.js" spam to clean after the fix synced, same session. Only a live warm-fix verification, not a full `killall` + cold-restart re-check yet.
 - **Step 8's `buyTea`/`throwParty` dispatch itself is untested, and now dormant** — corp is paused (BN5 pivot), so this can't be exercised until BN3 resumes. Energy/morale were at 100% (above threshold) both times checked before the pause, so neither worker had fired yet even while corp was live. Spot-check after real production time once BN3 is resumed.
 - **Ambiguous whether the Step 5 double-dispatch bug actually double-charged ~$25B** before the fix landed — `purchaseWarehouse` fired twice per city with no caught error either time. Low-stakes (in-game currency), never confirmed either way.
 - **`ram-audit`'s cost table excludes the entire Corporation API** (confirmed via `.claude/skills/ram-audit/SKILL.md`) — it can't auto-detect the bare-property-name RAM-analyzer collision for any `corp-agent-*.ts`/`corp-manager.ts` file the way it does for gang/hacking scripts. Live `mem` is the only reliable check for this file family, whenever BN3 resumes.
@@ -97,6 +111,7 @@ Scoped via a full `/interview` (Project Brief confirmed, independently reviewed 
 
 - **Play BN5 normally** — hacking automation + gang running as-is toward destroying `w0r1d_d43m0n` for real (earns SF5); no dedicated script work planned per `[[bitburner_bn5_intelligence]]`.
 - Watch `gang-manager.js` across a real cold restart to confirm the RAM-priority fix is durable unattended, not just after the one manual nudge that proved it.
+- Same cold-restart check for the new `scan-root.js` reserve (2026-08-06) — confirmed warm, not yet re-verified after a full `killall`.
 - Once BN5 is cleared: resume BN3 corp automation (uncomment `controller.ts`'s corp block) and pick up the v2 backlog (2nd division, R&D, advertising, IPO, faction bribing), then BN4 per `[[bitburner_bitnode_route]]`'s order.
 - Next program unlock → run `check-unlock`.
 - New `ns.*` RAM cost needed → run `ns-cost-lookup` instead of a manual grep.
