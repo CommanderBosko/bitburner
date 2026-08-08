@@ -1,6 +1,6 @@
 # Project State
 
-_Last updated: 2026-08-06_
+_Last updated: 2026-08-08_
 
 ## Current Project State
 
@@ -65,6 +65,16 @@ Two independent fixes, no BitNode/architecture change — still BN5 (Intelligenc
 
 ---
 
+### 2026-08-07/08: No code changes — SF4-gated program-buying question answered, dev watchers restarted
+
+Two brief sessions, neither touched code (`git status` clean, no commits since the 08-06 close).
+
+**2026-08-07** — user asked whether a script could buy dark-web programs (`FTPCrack.exe`, `SQLInject.exe`, etc.) without SF4. Confirmed a hard no: `ns.singularity.purchaseProgram()` is the only scriptable equivalent of the terminal `buy` command, and it lives entirely inside the SF4-gated `Singularity` interface — this save left BN4 early (uncleared) and has never earned any SF4 level since. Offered to write the script now anyway so it's ready to drop in the moment SF4 exists; the user hadn't decided by session end (open, not actioned — see Next Steps). Also prompted an update to `[[bitburner_singularity_locked]]`: its 2026-07-26 "lock lifted inside BN4" note only ever applied while the save was actually in BN4, and the save has since moved on to BN2→BN3→BN5 with the lock back in full force — memory updated to flag that reversion explicitly.
+
+**2026-08-08** — `npm run watch`/`npm run sync` restarted as detached background processes via the `dev-watch` skill (routine dev-loop housekeeping, no code changes).
+
+---
+
 **Historical (BitNode 4, superseded — save is no longer in this BitNode):** a 6-session, 6-root-cause "$0/pitiful scripted income" saga on the fresh-BN4 hacking chain, fully resolved (confirmed live: `hack.js` running, money climbing) before the save moved on. Root causes in order found: `buildWorkingSet`'s debit-by-`needed`/`break`-vs-`continue` bug (`c344ad9`) → purchased-server RAM fragmentation from a buy/upgrade tie (`f2ccfc8`) → `rescan-loop.js` dying with nothing to relaunch it (`7c666e0` watchdog) → `buildWorkingSet`'s 1-thread admission bar diluting a small fleet too thin (`20a2872`) → one due target's uncapped grow request starving every other target each tick (`75bae6a`) → fleet-growth managers themselves starved of RAM plus three more stacked dispatch bugs (`47b60fe`). Also built: self-learning `ns.dnet` darknet automation, `bitnodes.md`/`jobs.md`/`singularity-roadmap.md` research docs, and the RAM-priority gating system (`hasEnoughHomeRam`, 64GB threshold) this session's BN3 work extends. Full detail recoverable from prior commit history / `session-summary-archive.md` if BN4 is ever replayed to actually clear it to SF4.3.
 
 ## Current Goals
@@ -76,6 +86,7 @@ Two independent fixes, no BitNode/architecture change — still BN5 (Intelligenc
 
 **Short-term:**
 - Once `gang-manager.js` has run a while, re-check whether `hacknet-manager.js`/`darknet-manager.js` are getting real leftover RAM now that corp's reservation is gone (paused) — the squeeze in `[[bitburner_corp_hacknet_ram_squeeze]]` was gang-caused, not corp-caused, so it may still recur even without corp in the mix.
+- **Open/optional, user hasn't decided (asked 2026-08-07):** whether to pre-build a `purchaseProgram`-buying script now, dormant until SF4 is earned, or wait until SF4 actually exists to build it. Not blocking anything — ask before starting if it comes up again.
 - Given the BN3 Step 7 livelock's root cause (sequential refresh gates can outlast their own staleness threshold), keep in mind if a similar symptom ever recurs in `corp-manager.ts` once BN3 resumes — the fix so far was longer timers, not a structural resume-from-frontier redesign.
 
 **Long-term:**
@@ -113,6 +124,7 @@ Two independent fixes, no BitNode/architecture change — still BN5 (Intelligenc
 - Watch `gang-manager.js` across a real cold restart to confirm the RAM-priority fix is durable unattended, not just after the one manual nudge that proved it.
 - Same cold-restart check for the new `scan-root.js` reserve (2026-08-06) — confirmed warm, not yet re-verified after a full `killall`.
 - Once BN5 is cleared: resume BN3 corp automation (uncomment `controller.ts`'s corp block) and pick up the v2 backlog (2nd division, R&D, advertising, IPO, faction bribing), then BN4 per `[[bitburner_bitnode_route]]`'s order.
+- If asked again: decide whether to pre-build the SF4-gated `purchaseProgram` script now (dormant until SF4) or wait — open question from 2026-08-07, not yet decided.
 - Next program unlock → run `check-unlock`.
 - New `ns.*` RAM cost needed → run `ns-cost-lookup` instead of a manual grep.
 - Close every session with `session-closer` going forward.
