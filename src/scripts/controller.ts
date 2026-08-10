@@ -41,9 +41,13 @@ const BN4_SINGULARITY_SCRIPTS = [
 	HOME_RAM_LOOP_SCRIPT,
 	HOME_CORES_LOOP_SCRIPT,
 	PROGRAM_BUY_LOOP_SCRIPT,
-	BACKDOOR_LOOP_SCRIPT,
 	COMPANY_WORK_LOOP_SCRIPT,
 	FACTION_WORK_LOOP_SCRIPT,
+	// Moved to the end 2026-08-09 (user-directed, "for now"): at 35.90GB it dwarfs every other
+	// entry here (next-largest is home-cores-loop.js at 3.60GB), so cost-ascending attempt order
+	// alone already gives the cheaper siblings first crack most ticks - this just makes that
+	// explicit instead of leaving backdoor-loop.js competing from the middle of the list.
+	BACKDOOR_LOOP_SCRIPT,
 ];
 // CORP_MANAGER_SCRIPT/CORP_WORKER_SCRIPTS/CORP_RAM_RESERVE_FRACTION: PAUSED (2026-08-06) along
 // with computeCorpReserveGb and the corp-manager.js launch block below - commented out (not

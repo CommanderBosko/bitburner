@@ -55,7 +55,8 @@ function analyzeFile(tsPath) {
 	// Returns Map<targetScriptName, { gated: boolean }>
 	const edges = new Map();
 	if (!existsSync(tsPath)) return edges;
-	const lines = readFileSync(tsPath, "utf8").split("\n");
+	const fileText = readFileSync(tsPath, "utf8");
+	const lines = fileText.split("\n");
 
 	const constMap = new Map();
 	for (const line of lines) {
@@ -64,20 +65,36 @@ function analyzeFile(tsPath) {
 	}
 	if (constMap.size === 0) return edges;
 
-	// Second pass (needs constMap fully built first): single-line `const ARRAY_NAME = [A, B, C];`
-	// declarations whose members are all known script-name consts - e.g.
-	// `const BN4_SINGULARITY_SCRIPTS = [HOME_RAM_LOOP_SCRIPT, ...];`. Only resolved to member
-	// *names* here; whether each member becomes a real edge still goes through record() below,
-	// same as the inline-array-literal case.
+	// Second pass (needs constMap fully built first): `const ARRAY_NAME = [A, B, C];` declarations
+	// whose members are all known script-name consts - e.g. this repo's
+	// `const BN4_SINGULARITY_SCRIPTS = [HOME_RAM_LOOP_SCRIPT, ...];` style of naming a reused
+	// script list once instead of inlining it at every call site. Matched against the whole
+	// fileText (not per-line, as this used to do) since these declarations are just as often
+	// multi-line - one member per line, e.g. BN4_SINGULARITY_SCRIPTS itself - as single-line (e.g.
+	// WORKER_SCRIPTS): `[^\]]*` already spans newlines on its own (only `.` needs a dotall flag for
+	// that), so scanning line-by-line rather than over fileText was the one thing that actually
+	// broke the multi-line case - silently dropping every member of any multi-line array from the
+	// tree with no error, discovered when BN4_SINGULARITY_SCRIPTS's 6 members (incl.
+	// faction-work-loop.js/program-buy-loop.js) went missing from the printed tree despite being
+	// genuinely wired in via controller.ts's own for-of loop over it.
 	const arrayConstMap = new Map();
-	for (const line of lines) {
-		const m = line.match(arrayConstDeclPattern);
-		if (!m) continue;
-		const members = m[2]
+	const arrayConstGlobalPattern = new RegExp(arrayConstDeclPattern.source, "g");
+	let am;
+	while ((am = arrayConstGlobalPattern.exec(fileText))) {
+		// Strip `// ...` line-comments before splitting on commas - this repo's arrays commonly
+		// carry an explanatory comment on its own line between two members (e.g.
+		// BN4_SINGULARITY_SCRIPTS's own "moved to the end" note ahead of its last entry). Left
+		// unstripped, the comment text glues onto the following member across the comma split (trim()
+		// only strips leading/trailing whitespace, not an embedded "// ...\n\t" prefix), so the
+		// fragment no longer equals a known const name and that member silently drops out - exactly
+		// how BACKDOOR_LOOP_SCRIPT went missing from the printed tree right after annotating its own
+		// reorder.
+		const members = am[2]
+			.replace(/\/\/[^\n]*/g, "")
 			.split(",")
 			.map((s) => s.trim())
 			.filter((s) => constMap.has(s));
-		if (members.length > 0) arrayConstMap.set(m[1], members);
+		if (members.length > 0) arrayConstMap.set(am[1], members);
 	}
 
 	const escaped = [...constMap.keys()].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
