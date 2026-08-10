@@ -69,6 +69,14 @@ const BN4_SINGULARITY_SCRIPTS = [
 	// explicit instead of leaving backdoor-loop.js competing from the middle of the list.
 	BACKDOOR_LOOP_SCRIPT,
 ];
+// gang-manager.js was given a real launch-attempt slot ahead of these three (2026-08-09,
+// user-directed, "come after crime-loop") - see the gang-manager.js launch block in main() for
+// where. home-ram-loop.js stays outside this subset and still attempts first, unchanged: it's
+// what raises the home-RAM threshold everything else here (including gang-manager.js's own gate)
+// depends on, so it keeps first crack regardless of gang-manager.js's new position. This array is
+// only the launch-order subset - BN4_SINGULARITY_SCRIPTS above (all four) remains the single
+// source of truth for currentReserveGb's reserve sum, since reserve totals don't care about order.
+const LOWER_TIER_BN4_SINGULARITY_SCRIPTS = [HOME_CORES_LOOP_SCRIPT, PROGRAM_BUY_LOOP_SCRIPT, BACKDOOR_LOOP_SCRIPT];
 // See the work-loop group comment above. null until the first decision is made; updated only by
 // the launch block in main() (currentReserveGb's own call site only reads these, never writes).
 let activeWorkScript: string | null = null;
@@ -298,8 +306,9 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // tick regardless of how much gets reserved for it - reserving anyway would zero out the whole
 // home budget (via computeFreeRam's Math.max(0, ...) clamp) for a launch that's structurally
 // impossible, starving every other manager and the hack/grow/weaken engine for nothing. None of
-// the previously-reserved scripts ever needed this guard (max ~36GB for gang-manager.js against
-// any plausible home size) - only relevant here because the BN4_SINGULARITY_SCRIPTS below can
+// the previously-reserved scripts ever needed this guard (gang-manager.js is ~3.60GB since its
+// 2026-08-10 RAM split into gang-agent-*.ts workers - see [[bitburner_bn4_singularity]] - trivial
+// against any plausible home size) - only relevant here because the BN4_SINGULARITY_SCRIPTS below can
 // individually cost 50GB+ at SF4 level 0 (the 16x tier in every ns.singularity.* function's "RAM
 // cost: X GB * 16/4/1" doc comment - see [[bitburner_bn4_singularity]]). ns.run's own free-RAM
 // check already no-ops harmlessly every tick until home grows past a given script's cost, same
@@ -1040,46 +1049,18 @@ export async function main(ns: NS): Promise<void> {
 		// 	}
 		// }
 
-		// server-purchase-manager.js's first launch attempt used to race scan-root.js's own
-		// boot-time launch of rescan-loop.js: controller.js starts running (and hits this block on
-		// its very first tick) while scan-root.js is still resident and mid-runWithRetry for
-		// rescan-loop.js, and 6.25GB of extra demand landing in that narrow window was enough to
-		// starve rescan-loop.js out (confirmed in-game: "scan-root: failed to start
-		// scripts/rescan-loop.js"). Gating this specific launch on rescan-loop.js already being up
-		// sidesteps the race entirely - by the time that's true, scan-root.js's main() is already
-		// returning (launching rescan-loop.js is its last action), so there's no meaningful
-		// contention window left. Also gated behind the same 64GB threshold as
-		// hacknet-manager.js/darknet-manager.js below - purchased-server income is weak enough early
-		// game that it shouldn't compete with scan-loop/controller/weaken-grow-hack for RAM either.
-		if (
-			ns.isRunning(RESCAN_LOOP_SCRIPT, "home") &&
-			hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) &&
-			!ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home")
-		) {
-			const pid = ns.run(SERVER_PURCHASE_MANAGER_SCRIPT);
-			if (pid === 0) {
-				ns.print(`controller: still waiting for RAM to start ${SERVER_PURCHASE_MANAGER_SCRIPT}`);
-			}
-		}
-
-		// BN4_SINGULARITY_SCRIPTS re-wired 2026-08-09 (see the constant's own comment above for
-		// the hardcoded-BN4 rationale and each script's own try/catch backoff for the still-open
-		// 07-31 question) - gated only on rescan-loop.js being up, same boot-race-avoidance
-		// rationale as server-purchase-manager.js above, deliberately NOT behind the same 64GB
-		// lower-priority RAM threshold used below: that gate would be circular for
-		// home-ram-loop.js (it's what's supposed to help reach the threshold) and simply
-		// undersized for the rest (several of these can individually cost more than 64GB at SF4
-		// level 0 - see reserveIfAffordable's comment). ns.run's own free-RAM check each tick
-		// already decides real launchability, same as every other manager here. Independent
-		// siblings, not chained to each other's running-state like gang->hacknet/darknet below -
-		// their cost tiers are far enough apart that attempt order alone (cost-ascending, see
-		// BN4_SINGULARITY_SCRIPTS) is enough of a soft priority.
+		// home-ram-loop.js re-wired 2026-08-09 (see BN4_SINGULARITY_SCRIPTS's own comment above for
+		// the hardcoded-BN4 rationale and its try/catch backoff for the still-open 07-31 question) -
+		// gated only on rescan-loop.js being up, same boot-race-avoidance rationale as
+		// server-purchase-manager.js above, deliberately NOT behind the same 64GB lower-priority RAM
+		// threshold used below: that gate would be circular (home-ram-loop.js is what's supposed to
+		// help reach the threshold). ns.run's own free-RAM check each tick already decides real
+		// launchability, same as every other manager here.
 		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
-			for (const script of BN4_SINGULARITY_SCRIPTS) {
-				if (ns.isRunning(script, "home")) continue;
-				const pid = ns.run(script);
+			if (!ns.isRunning(HOME_RAM_LOOP_SCRIPT, "home")) {
+				const pid = ns.run(HOME_RAM_LOOP_SCRIPT);
 				if (pid === 0) {
-					ns.print(`controller: still waiting for RAM to start ${script}`);
+					ns.print(`controller: still waiting for RAM to start ${HOME_RAM_LOOP_SCRIPT}`);
 				}
 			}
 
@@ -1110,37 +1091,111 @@ export async function main(ns: NS): Promise<void> {
 					ns.print(`controller: still waiting for RAM to start ${AUGMENT_LOOP_SCRIPT}`);
 				}
 			}
-		}
 
-		// hacknet-manager.js/darknet-manager.js/gang-manager.js still wait for home RAM to clear
-		// the threshold before even attempting to launch, so they can never compete with
-		// scan-loop/controller/weaken-grow-hack (or server-purchase-manager.js) for RAM while home
-		// is this tight. Moved here from rescan-loop.js (2026-07-30) - they were never actually
-		// about rescanning, just riding along on rescan-loop.js's always-alive loop; controller.js's
-		// own dispatch-loop tick is the natural home for every lower-priority manager launch.
-		//
-		// gang-manager.js gets a real (not just attempt-order) priority over hacknet/darknet
-		// (2026-08-04, user-directed): hacknet-manager.js/darknet-manager.js are only even
-		// attempted once gang-manager.js is confirmed running. Attempt-order alone wasn't enough -
-		// gang-manager.js is tried first each tick, but ns.run() checks real free home RAM
-		// independently, so when free RAM was too small for gang's 36.10GB but big enough for
-		// hacknet+darknet's combined 10.6GB, they'd launch anyway on the same tick and then sit
-		// resident permanently, locking in RAM gang needed. Gating their attempt on gang already
-		// being alive means they can never again grab RAM out from under it - confirmed via
-		// [[bitburner_bitnode_route]]'s SF2 note that gang is meant to be live in this BitNode.
-		if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
-			if (!ns.isRunning(GANG_MANAGER_SCRIPT, "home")) {
-				const pid = ns.run(GANG_MANAGER_SCRIPT);
-				if (pid === 0) {
-					ns.print(`controller: still waiting for RAM to start ${GANG_MANAGER_SCRIPT}`);
-				}
-			} else {
-				for (const lowerPriorityScript of [HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
-					if (ns.isRunning(lowerPriorityScript, "home")) continue;
-					const pid = ns.run(lowerPriorityScript);
+			// gang-manager.js: launch-attempt slot moved here (2026-08-09, user-directed) - right
+			// after the work-loop group (so it comes after crime-loop.js) and ahead of
+			// server-purchase-manager.js and LOWER_TIER_BN4_SINGULARITY_SCRIPTS below
+			// (home-cores-loop.js/program-buy-loop.js/backdoor-loop.js), previously tried only from a
+			// separate later block gated purely on hasEnoughHomeRam. Still gated on that same
+			// threshold (unchanged) - hacknet-manager.js/darknet-manager.js/server-purchase-manager.js
+			// still wait for home RAM to clear it before even attempting to launch, so none of them can
+			// compete with scan-loop/controller/weaken-grow-hack for RAM while home is this tight.
+			//
+			// gang-manager.js gets a real (not just attempt-order) priority over hacknet/darknet
+			// (2026-08-04, user-directed): hacknet-manager.js/darknet-manager.js are only even
+			// attempted once gang-manager.js is confirmed running. Attempt-order alone wasn't enough -
+			// gang-manager.js is tried first each tick, but ns.run() checks real free home RAM
+			// independently, so when free RAM was too small for gang's cost (36.10GB before its
+			// 2026-08-10 RAM split, ~3.60GB now - see [[bitburner_bn4_singularity]]) but big enough for
+			// hacknet+darknet's combined 10.6GB, they'd launch anyway on the same tick and then sit
+			// resident permanently, locking in RAM gang needed. Gating their attempt on gang already
+			// being alive means they can never again grab RAM out from under it - confirmed via
+			// [[bitburner_bitnode_route]]'s SF2 note that gang is meant to be live in this BitNode.
+			if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB)) {
+				if (!ns.isRunning(GANG_MANAGER_SCRIPT, "home")) {
+					const pid = ns.run(GANG_MANAGER_SCRIPT);
 					if (pid === 0) {
-						ns.print(`controller: still waiting for RAM to start ${lowerPriorityScript}`);
+						ns.print(`controller: still waiting for RAM to start ${GANG_MANAGER_SCRIPT}`);
 					}
+				} else {
+					for (const lowerPriorityScript of [HACKNET_MANAGER_SCRIPT, DARKNET_MANAGER_SCRIPT]) {
+						if (ns.isRunning(lowerPriorityScript, "home")) continue;
+						const pid = ns.run(lowerPriorityScript);
+						if (pid === 0) {
+							ns.print(`controller: still waiting for RAM to start ${lowerPriorityScript}`);
+						}
+					}
+				}
+			}
+
+			// gangReserveGb (2026-08-09, user-directed, "gate future launches only" - see
+			// [[bitburner_bn4_singularity]]): attempt-order alone turned out NOT to make gang-manager.js
+			// higher-priority than its lower-priority siblings in practice - confirmed in-game the same
+			// session: backdoor-loop.js's 35.90GB got resident (via its own plain ns.run(), which only
+			// checks real free home RAM through the game engine) well before gang-manager.js ever had a
+			// real shot, permanently starving it at a 64GB home even though gang-manager.js was already
+			// being attempted first every tick. currentReserveGb's own gang/hacknet/darknet reserve (see
+			// lowerPriorityReserveGb there) only throttles the weaken/grow/hack dispatch loop - it was
+			// never consulted by these sibling ns.run() calls, which is the actual gap. Reserving
+			// gang-manager.js's live cost here closes that gap without evicting anything already running
+			// (that's a live-preemption design deliberately NOT taken - see the same memory note): only
+			// while gang-manager.js isn't already resident (once it is, its cost is already reflected in
+			// ns.getServerUsedRam and there's nothing left to protect) and only while hasEnoughHomeRam(...)
+			// is true (gang-manager.js isn't eligible to launch at all below that threshold, so reserving
+			// for it early would just needlessly hold everything below back). Shared by both
+			// server-purchase-manager.js and LOWER_TIER_BN4_SINGULARITY_SCRIPTS below, computed once
+			// since neither changes gang-manager.js's own running-state.
+			//
+			// Kept in place after gang-manager.js's own 2026-08-10 RAM split (36.10GB -> ~3.60GB, see
+			// [[bitburner_bn4_singularity]]) even though the original starvation this closed a gap for
+			// is now far less likely to recur at that size - a reserve this small costs nothing to keep
+			// as a safety margin, and removing it wasn't part of that fix.
+			const gangReserveGb =
+				hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) && !ns.isRunning(GANG_MANAGER_SCRIPT, "home")
+					? ns.getScriptRam(GANG_MANAGER_SCRIPT, "home")
+					: 0;
+
+			// server-purchase-manager.js: moved here (2026-08-09, user-directed) - right after
+			// gang-manager.js/hacknet/darknet and ahead of LOWER_TIER_BN4_SINGULARITY_SCRIPTS below,
+			// with the same gangReserveGb protection those three already have (see the comment above) -
+			// otherwise its plain ns.run() could just as easily grab real free home RAM gang-manager.js
+			// needed, the identical gap that let backdoor-loop.js starve it out before. Still gated on
+			// hasEnoughHomeRam(...) (unchanged) - purchased-server income is weak enough early game that
+			// it shouldn't compete with scan-loop/controller/weaken-grow-hack for RAM either. Its old
+			// rescan-loop.js-running boot-race guard (avoiding a race with scan-root.js's own boot-time
+			// launch of rescan-loop.js - see git history for the original incident) is now implied by
+			// already being inside the outer `if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home"))` block.
+			if (hasEnoughHomeRam(ns, LOWER_PRIORITY_HOME_RAM_THRESHOLD_GB) && !ns.isRunning(SERVER_PURCHASE_MANAGER_SCRIPT, "home")) {
+				const realFreeGb = ns.getServerMaxRam("home") - ns.getServerUsedRam("home");
+				if (realFreeGb - ns.getScriptRam(SERVER_PURCHASE_MANAGER_SCRIPT, "home") < gangReserveGb) {
+					ns.print(
+						`controller: holding back ${SERVER_PURCHASE_MANAGER_SCRIPT} - reserving ${gangReserveGb.toFixed(2)}GB for ${GANG_MANAGER_SCRIPT}`,
+					);
+				} else {
+					const pid = ns.run(SERVER_PURCHASE_MANAGER_SCRIPT);
+					if (pid === 0) {
+						ns.print(`controller: still waiting for RAM to start ${SERVER_PURCHASE_MANAGER_SCRIPT}`);
+					}
+				}
+			}
+
+			// Remaining BN4_SINGULARITY_SCRIPTS, deferred behind gang-manager.js and
+			// server-purchase-manager.js above (see LOWER_TIER_BN4_SINGULARITY_SCRIPTS's own comment) -
+			// independent siblings, not chained to each other's running-state, so cost-ascending attempt
+			// order alone is still enough of a soft priority among these three.
+			for (const script of LOWER_TIER_BN4_SINGULARITY_SCRIPTS) {
+				if (ns.isRunning(script, "home")) continue;
+				// Real free RAM, not the internal freeRam map above (that map is dispatch-only) -
+				// re-read every iteration so an earlier launch in this same loop is reflected before
+				// the next candidate's check.
+				const realFreeGb = ns.getServerMaxRam("home") - ns.getServerUsedRam("home");
+				if (realFreeGb - ns.getScriptRam(script, "home") < gangReserveGb) {
+					ns.print(`controller: holding back ${script} - reserving ${gangReserveGb.toFixed(2)}GB for ${GANG_MANAGER_SCRIPT}`);
+					continue;
+				}
+				const pid = ns.run(script);
+				if (pid === 0) {
+					ns.print(`controller: still waiting for RAM to start ${script}`);
 				}
 			}
 		}

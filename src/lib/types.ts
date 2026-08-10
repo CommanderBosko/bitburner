@@ -93,6 +93,89 @@ export interface CorpMaterialReport {
 	writtenAt: number;
 }
 
+// Gang report types, written by gang-agent-status.ts and read by gang-manager.ts (2026-08-10,
+// user-directed RAM split - see [[bitburner_bn4_singularity]]): gang-manager.ts used to reference
+// every ns.gang.* read+write function directly and cost 36.10GB permanently resident, which
+// starved it out of a 64GB home alongside the other always-on managers. Splitting it into this
+// cheap orchestrator (reads this cached report + dispatches small, transient gang-agent-*.ts
+// workers for the handful of live ns.gang.* calls each decision actually needs) mirrors the
+// existing corp-manager.ts/corp-agent-*.ts pattern in this same repo.
+//
+// hackSkill, not hack: a bare `.hack` property read gets phantom-charged by the game's static RAM
+// analyzer as if ns.hack() were called, even on a plain JSON-parsed field wholly unrelated to the
+// hacking worker function - same collision class as CorpWarehouseStatus.warehouseExists above and
+// the original gang-manager.ts's own `member["hack"]` bracket-notation workaround (see
+// [[bitburner_ram_analyzer_bugs]]). str/def/dex/agi/cha don't collide with any ns.* method name,
+// confirmed by the original file's own comment, so those are kept as plain names.
+export interface GangMemberSnapshot {
+	name: string;
+	task: string;
+	hackSkill: number;
+	str: number;
+	def: number;
+	dex: number;
+	agi: number;
+	cha: number;
+	// Combat: average of str/def/dex/agi ascension mult; hacking: hack ascension mult - see
+	// primaryAscMult in the original gang-manager.ts for why this single number, not all six, is
+	// tracked and compared against EARN_ASC_MULT_TARGET/ASCENSION_MULT_THRESHOLD.
+	primaryAscMult: number;
+	// Predicted primary-stat ascension gain from ascending right now (getAscensionResult) -
+	// undefined if ascension isn't currently possible for this member.
+	ascensionGain: number | undefined;
+	upgrades: string[];
+	augmentations: string[];
+}
+
+export interface GangTaskSnapshot {
+	name: string;
+	isHacking: boolean;
+	isCombat: boolean;
+	baseMoney: number;
+	baseRespect: number;
+	hackWeight: number;
+	strWeight: number;
+	defWeight: number;
+	dexWeight: number;
+	agiWeight: number;
+	chaWeight: number;
+	difficulty: number;
+	// Flattened from GangTaskStats.territory.{money,respect} - avoids importing the nested
+	// GangTerritory shape just for a report field, matching this file's existing plain-primitives
+	// style (see the CorpCoreReport comment above).
+	territoryMoneyExp: number;
+	territoryRespectExp: number;
+}
+
+export interface GangEquipmentSnapshot {
+	name: string;
+	cost: number;
+	isHacking: boolean;
+	isCombat: boolean;
+}
+
+export interface GangRivalSnapshot {
+	name: string;
+	winChance: number;
+}
+
+export interface GangStateReport {
+	isHacking: boolean;
+	respect: number;
+	respectForNextRecruitThreshold: number;
+	territory: number;
+	territoryWarfareEngaged: boolean;
+	canRecruit: boolean;
+	playerMoney: number;
+	members: GangMemberSnapshot[];
+	tasks: GangTaskSnapshot[];
+	equipment: GangEquipmentSnapshot[];
+	// Other gangs currently holding territory (own gang excluded) - empty until territory warfare
+	// is even relevant.
+	rivals: GangRivalSnapshot[];
+	writtenAt: number;
+}
+
 export type DarknetServerStatus = "probed" | "cracking" | "cracked" | "unresolvable";
 
 export interface CrackCandidate {
