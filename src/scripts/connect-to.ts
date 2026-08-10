@@ -6,7 +6,7 @@ export async function main(ns: NS): Promise<void> {
 	const parents = buildParentMap(ns);
 
 	if (target !== "home" && !parents.has(target)) {
-		ns.tprint(`connect-to: unknown host "${target}"`);
+		ns.tprint(`unknown host "${target}"`);
 		return;
 	}
 
@@ -15,5 +15,5 @@ export async function main(ns: NS): Promise<void> {
 		ns.singularity.connect(hop);
 	}
 
-	ns.tprint(`connect-to: connected to ${target}`);
+	ns.tprint(`connected to ${target}`);
 }

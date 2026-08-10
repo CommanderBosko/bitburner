@@ -36,12 +36,12 @@ export async function main(ns: NS): Promise<void> {
 	try {
 		const created = ns.corporation.createCorporation(CORP_NAME, false);
 		if (created) {
-			ns.tprint(`corp-agent-create: founded "${CORP_NAME}" with free BN3 seed funding.`);
+			ns.tprint(`founded "${CORP_NAME}" with free BN3 seed funding.`);
 			ns.toast(`Founded ${CORP_NAME}`, "success");
 		} else {
 			ns.print("corp-agent-create: createCorporation returned false");
 		}
 	} catch (error) {
-		ns.tprint(`corp-agent-create: createCorporation threw - ${String(error)}`);
+		ns.tprint(`createCorporation threw - ${String(error)}`);
 	}
 }

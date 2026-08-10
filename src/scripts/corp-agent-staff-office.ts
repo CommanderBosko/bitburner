@@ -12,7 +12,7 @@ export async function main(ns: NS): Promise<void> {
 		for (const role of task.roles) {
 			const hired = ns.corporation.hireEmployee(DIVISION_NAME, task.city, role);
 			if (hired) {
-				ns.tprint(`corp-agent-staff-office: hired ${role} in ${task.city}`);
+				ns.tprint(`hired ${role} in ${task.city}`);
 			} else {
 				ns.print(`corp-agent-staff-office: hireEmployee(${task.city}, ${role}) returned false (office full or no applicants?)`);
 			}

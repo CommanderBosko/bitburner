@@ -818,7 +818,7 @@ export async function main(ns: NS): Promise<void> {
 				workingSet = [];
 				nextDispatchAt.clear();
 				if (!wasEmpty) {
-					ns.tprint("controller: no rooted, hackable target found in /data/servers.json. Run scan-root.js first.");
+					ns.tprint("no rooted, hackable target found in /data/servers.json. Run scan-root.js first.");
 				}
 				wasEmpty = true;
 			} else {

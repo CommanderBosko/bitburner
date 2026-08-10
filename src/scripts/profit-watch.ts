@@ -17,7 +17,7 @@ export async function main(ns: NS): Promise<void> {
 
 		if (gained > 0) {
 			const message = `Hacking is profitable! +$${Math.round(gained).toLocaleString()} earned after ~${elapsedMin} min.`;
-			ns.tprint(`profit-watch: ${message}`);
+			ns.tprint(message);
 			ns.alert(message);
 			return;
 		}

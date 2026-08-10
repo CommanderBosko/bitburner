@@ -11,7 +11,7 @@ export async function main(ns: NS): Promise<void> {
 	for (const city of cities) {
 		try {
 			ns.corporation.setSmartSupply(DIVISION_NAME, city, true);
-			ns.tprint(`corp-agent-enable-smart-supply: enabled smart supply in ${city}`);
+			ns.tprint(`enabled smart supply in ${city}`);
 		} catch (error) {
 			ns.print(`corp-agent-enable-smart-supply: setSmartSupply(${city}) threw - ${String(error)}`);
 		}

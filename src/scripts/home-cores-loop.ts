@@ -17,7 +17,7 @@ export async function main(ns: NS): Promise<void> {
 			if (ns.singularity.upgradeHomeCores()) {
 				// tprint persists in the terminal; print-only fades from the tail after a few
 				// seconds and is easy to miss for a one-shot purchase event.
-				ns.tprint(`home-cores-loop: upgraded home cores to ${ns.getServer("home").cpuCores}`);
+				ns.tprint(`upgraded home cores to ${ns.getServer("home").cpuCores}`);
 			}
 		} catch (error) {
 			ns.print(`home-cores-loop: upgradeHomeCores failed (${String(error)}) - backing off`);

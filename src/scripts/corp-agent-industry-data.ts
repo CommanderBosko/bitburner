@@ -22,7 +22,7 @@ export async function main(ns: NS): Promise<void> {
 	};
 	ns.write(CORP_INDUSTRY_PATH, JSON.stringify(report, null, 2), "w");
 	ns.tprint(
-		`corp-agent-industry-data: ${INDUSTRY_TYPE} - required=[${report.requiredMaterials.join(", ")}] ` +
+		`${INDUSTRY_TYPE} - required=[${report.requiredMaterials.join(", ")}] ` +
 			`produced=[${report.producedMaterials.join(", ")}] makesMaterials=${report.makesMaterials} makesProducts=${report.makesProducts}`,
 	);
 }

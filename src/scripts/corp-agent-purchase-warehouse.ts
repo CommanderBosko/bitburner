@@ -9,7 +9,7 @@ export async function main(ns: NS): Promise<void> {
 	for (const city of missingCities) {
 		try {
 			ns.corporation.purchaseWarehouse(DIVISION_NAME, city);
-			ns.tprint(`corp-agent-purchase-warehouse: purchased warehouse in ${city}`);
+			ns.tprint(`purchased warehouse in ${city}`);
 		} catch (error) {
 			ns.print(`corp-agent-purchase-warehouse: purchaseWarehouse(${city}) threw - ${String(error)}`);
 		}

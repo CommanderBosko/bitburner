@@ -34,7 +34,7 @@ export async function main(ns: NS): Promise<void> {
 
 	rows.sort((a, b) => b.ramGb - a.ramGb);
 
-	ns.tprint(`ps-audit: ${rows.length} processes across ${hosts.length} hosts, ${totalRamGb.toFixed(2)}GB total RAM in use`);
+	ns.tprint(`${rows.length} processes across ${hosts.length} hosts, ${totalRamGb.toFixed(2)}GB total RAM in use`);
 	for (const row of rows) {
 		ns.tprint(`  ${row.host} :: ${row.filename} ${row.target} x${row.threads} = ${row.ramGb.toFixed(2)}GB`);
 	}
@@ -44,14 +44,14 @@ export async function main(ns: NS): Promise<void> {
 		byTarget.set(row.target, (byTarget.get(row.target) ?? 0) + row.ramGb);
 	}
 	const targetLines = [...byTarget.entries()].sort((a, b) => b[1] - a[1]);
-	ns.tprint(`ps-audit: RAM by target -----`);
+	ns.tprint(`RAM by target -----`);
 	for (const [target, ramGb] of targetLines) {
 		ns.tprint(`  ${target || "(none)"}: ${ramGb.toFixed(2)}GB`);
 	}
 
 	let totalMaxRamGb = 0;
 	let totalFreeRamGb = 0;
-	ns.tprint(`ps-audit: capacity by host -----`);
+	ns.tprint(`capacity by host -----`);
 	for (const host of hosts) {
 		const maxRamGb = ns.getServerMaxRam(host);
 		const freeRamGb = maxRamGb - ns.getServerUsedRam(host);
@@ -59,5 +59,5 @@ export async function main(ns: NS): Promise<void> {
 		totalFreeRamGb += freeRamGb;
 		ns.tprint(`  ${host}: ${maxRamGb.toFixed(2)}GB max, ${freeRamGb.toFixed(2)}GB free`);
 	}
-	ns.tprint(`ps-audit: fleet totals: ${totalMaxRamGb.toFixed(2)}GB max, ${totalFreeRamGb.toFixed(2)}GB free`);
+	ns.tprint(`fleet totals: ${totalMaxRamGb.toFixed(2)}GB max, ${totalFreeRamGb.toFixed(2)}GB free`);
 }

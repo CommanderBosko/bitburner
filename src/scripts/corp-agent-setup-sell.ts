@@ -14,7 +14,7 @@ export async function main(ns: NS): Promise<void> {
 		for (const material of materials) {
 			try {
 				ns.corporation.sellMaterial(DIVISION_NAME, city, material, "MAX", "MP");
-				ns.tprint(`corp-agent-setup-sell: set MAX/MP sell order for ${material} in ${city}`);
+				ns.tprint(`set MAX/MP sell order for ${material} in ${city}`);
 			} catch (error) {
 				ns.print(`corp-agent-setup-sell: sellMaterial(${city}, ${material}) threw - ${String(error)}`);
 			}

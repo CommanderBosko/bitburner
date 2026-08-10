@@ -9,7 +9,7 @@ export async function main(ns: NS): Promise<void> {
 	for (const city of missingCities) {
 		try {
 			ns.corporation.expandCity(DIVISION_NAME, city);
-			ns.tprint(`corp-agent-expand-city: expanded "${DIVISION_NAME}" into ${city}`);
+			ns.tprint(`expanded "${DIVISION_NAME}" into ${city}`);
 		} catch (error) {
 			ns.print(`corp-agent-expand-city: expandCity(${city}) threw - ${String(error)}`);
 		}

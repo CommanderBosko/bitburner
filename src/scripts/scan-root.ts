@@ -60,7 +60,7 @@ export async function main(ns: NS): Promise<void> {
 	if (!ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
 		const rescanPid = await runWithRetry(ns, RESCAN_LOOP_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
 		if (rescanPid === 0) {
-			ns.tprint(`scan-root: failed to start ${RESCAN_LOOP_SCRIPT} - check RAM/sync`);
+			ns.tprint(`failed to start ${RESCAN_LOOP_SCRIPT} - check RAM/sync`);
 		}
 	}
 
@@ -69,7 +69,7 @@ export async function main(ns: NS): Promise<void> {
 	if (!ns.isRunning(CONTROLLER_SCRIPT, "home")) {
 		const controllerPid = await runWithRetry(ns, CONTROLLER_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
 		if (controllerPid === 0) {
-			ns.tprint(`scan-root: failed to start ${CONTROLLER_SCRIPT} - check RAM/sync`);
+			ns.tprint(`failed to start ${CONTROLLER_SCRIPT} - check RAM/sync`);
 		}
 	}
 }

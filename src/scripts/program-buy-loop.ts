@@ -19,7 +19,7 @@ export async function main(ns: NS): Promise<void> {
 				if (ns.singularity.purchaseTor()) {
 					// tprint persists in the terminal; print-only fades from the tail after a few
 					// seconds and is easy to miss for a one-shot purchase event.
-					ns.tprint("program-buy-loop: purchased TOR router");
+					ns.tprint("purchased TOR router");
 				}
 			}
 
@@ -30,7 +30,7 @@ export async function main(ns: NS): Promise<void> {
 				for (const program of ns.singularity.getDarkwebPrograms()) {
 					if (ns.fileExists(program, "home")) continue;
 					if (ns.singularity.purchaseProgram(program)) {
-						ns.tprint(`program-buy-loop: purchased ${program}`);
+						ns.tprint(`purchased ${program}`);
 					}
 				}
 			}

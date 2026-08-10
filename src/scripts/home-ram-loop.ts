@@ -18,7 +18,7 @@ export async function main(ns: NS): Promise<void> {
 			if (ns.singularity.upgradeHomeRam()) {
 				// tprint persists in the terminal; print-only fades from the tail after a few
 				// seconds and is easy to miss for a one-shot purchase event.
-				ns.tprint(`home-ram-loop: upgraded home RAM to ${ns.getServerMaxRam("home")}GB`);
+				ns.tprint(`upgraded home RAM to ${ns.getServerMaxRam("home")}GB`);
 			}
 		} catch (error) {
 			ns.print(`home-ram-loop: upgradeHomeRam failed (${String(error)}) - backing off`);

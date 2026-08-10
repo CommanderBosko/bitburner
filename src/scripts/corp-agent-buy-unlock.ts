@@ -9,7 +9,7 @@ export async function main(ns: NS): Promise<void> {
 	for (const name of missing) {
 		try {
 			ns.corporation.purchaseUnlock(name);
-			ns.tprint(`corp-agent-buy-unlock: purchased "${name}"`);
+			ns.tprint(`purchased "${name}"`);
 		} catch (error) {
 			ns.print(`corp-agent-buy-unlock: purchaseUnlock("${name}") threw - ${String(error)}`);
 		}

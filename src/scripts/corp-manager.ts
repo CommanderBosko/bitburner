@@ -115,7 +115,7 @@ export async function main(ns: NS): Promise<void> {
 		await ns.sleep(BOOTSTRAP_POLL_MS);
 	}
 
-	ns.tprint(`corp-manager: hasCorporation() is true - switching to the steady-state decision loop.`);
+	ns.tprint(`hasCorporation() is true - switching to the steady-state decision loop.`);
 
 	// Steady state: state-driven via nextUpdate() (0GB) rather than a timer-poll loop - it
 	// blocks for real corp-cycle time on its own, so acting only once per "START" (the first of
