@@ -34,38 +34,36 @@ export async function main(ns: NS): Promise<void> {
 				}
 			}
 
-			// workForCompany/workForFaction each cancel the other's in-progress work (single
-			// player "work slot") - defer to company-work-loop.js whenever it's already active
-			// rather than fighting it for the slot every tick.
+			// controller.ts's coordinator guarantees crime-loop.js/company-work-loop.js are never
+			// resident at the same time as this script (kill-then-run, see controller.ts's
+			// decideActiveWorkScript) - no cross-script deference needed here, just the
+			// pre-existing same-target dedup below.
 			const currentWork = ns.singularity.getCurrentWork();
-			const workingForCompany = currentWork !== null && currentWork.type === "COMPANY";
 
-			if (!workingForCompany) {
-				if (targetFaction === null) {
-					const joined = ns.getPlayer().factions;
-					// Sort so PREFERRED_FIRST_FACTION (if joined) is tried first, without
-					// rebuilding the array from scratch - keeps every element's type as the
-					// real FactionName union instead of widening to string (see the type
-					// derivation above for why that distinction matters here).
-					const ordered = [...joined].sort((a, b) =>
-						a === PREFERRED_FIRST_FACTION ? -1 : b === PREFERRED_FIRST_FACTION ? 1 : 0,
-					);
-					for (const candidate of ordered) {
-						if (ns.singularity.workForFaction(candidate, WORK_TYPE, false)) {
-							targetFaction = candidate;
-							ns.print(`faction-work-loop: working for ${candidate}`);
-							break;
-						}
+			if (targetFaction === null) {
+				const joined = ns.getPlayer().factions;
+				// Sort so PREFERRED_FIRST_FACTION (if joined) is tried first, without
+				// rebuilding the array from scratch - keeps every element's type as the
+				// real FactionName union instead of widening to string (see the type
+				// derivation above for why that distinction matters here).
+				const ordered = [...joined].sort((a, b) =>
+					a === PREFERRED_FIRST_FACTION ? -1 : b === PREFERRED_FIRST_FACTION ? 1 : 0,
+				);
+				for (const candidate of ordered) {
+					if (ns.singularity.workForFaction(candidate, WORK_TYPE, false)) {
+						targetFaction = candidate;
+						ns.print(`faction-work-loop: working for ${candidate}`);
+						break;
 					}
-				} else {
-					const alreadyWorkingHere =
-						currentWork !== null && currentWork.type === "FACTION" && currentWork.factionName === targetFaction;
-					if (!alreadyWorkingHere) {
-						const started = ns.singularity.workForFaction(targetFaction, WORK_TYPE, false);
-						if (!started) {
-							ns.print(`faction-work-loop: failed to resume work for ${targetFaction} - re-searching`);
-							targetFaction = null;
-						}
+				}
+			} else {
+				const alreadyWorkingHere =
+					currentWork !== null && currentWork.type === "FACTION" && currentWork.factionName === targetFaction;
+				if (!alreadyWorkingHere) {
+					const started = ns.singularity.workForFaction(targetFaction, WORK_TYPE, false);
+					if (!started) {
+						ns.print(`faction-work-loop: failed to resume work for ${targetFaction} - re-searching`);
+						targetFaction = null;
 					}
 				}
 			}

@@ -27,8 +27,28 @@ const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
 const HOME_RAM_LOOP_SCRIPT = "scripts/home-ram-loop.js";
 const HOME_CORES_LOOP_SCRIPT = "scripts/home-cores-loop.js";
 const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";
+// Work-loop group (crime-loop.js/faction-work-loop.js/company-work-loop.js) - NOT in
+// BN4_SINGULARITY_SCRIPTS below, unlike every other entry here. Live `mem` (2026-08-09) showed
+// all three's real costs (crime 11.60GB, faction 11.60GB, company 8.10GB) exactly match summing
+// each referenced ns.singularity.* function's documented cost - and Bitburner charges that sum
+// once per resident script regardless of how many of the referenced functions actually get
+// called at runtime. Since all three share the same Singularity "work slot" anyway
+// (commitCrime/workForFaction/workForCompany each cancel whichever of the others is in
+// progress), running only one at a time (8.10-11.60GB) costs meaningfully less than merging them
+// into one script that references all three's functions permanently (~27.6GB constant) -
+// confirmed live 2026-08-09 that running all three simultaneously starved crime-loop.js of the
+// RAM to even launch. decideActiveWorkScript below (used by both currentReserveGb and the
+// dedicated launch block in main()) is the single source of truth for which one SHOULD be
+// resident; everything else in this group derives from it.
 const COMPANY_WORK_LOOP_SCRIPT = "scripts/company-work-loop.js";
 const FACTION_WORK_LOOP_SCRIPT = "scripts/faction-work-loop.js";
+const CRIME_LOOP_SCRIPT = "scripts/crime-loop.js";
+// augment-loop.js (28.10GB live) is launched by the same block but isn't part of the
+// exclusivity group - purchasing/installing augmentations doesn't touch the shared work slot, so
+// it runs unconditionally alongside whichever of crime/faction/company is active. It only starts
+// once ns.gang.inGang() (its own internal gate too, kept as defensive redundancy) - no point
+// paying its RAM during the whole pre-gang crime grind.
+const AUGMENT_LOOP_SCRIPT = "scripts/augment-loop.js";
 // program-buy-loop.js added 2026-08-09 (user-directed, same day as the revival above) after
 // confirming no script bought the TOR router / port-opener .exe programs at all - see
 // [[bitburner_bn4_singularity]]. Native cost ~4.55GB (hasTorRouter 0.05 + purchaseTor 2 +
@@ -36,19 +56,53 @@ const FACTION_WORK_LOOP_SCRIPT = "scripts/faction-work-loop.js";
 const PROGRAM_BUY_LOOP_SCRIPT = "scripts/program-buy-loop.js";
 // Cost-ascending: on a tick where only a partial subset is affordable, this gives the cheaper
 // scripts first crack via attempt order alone - a soft priority, not a hard gate (same principle
-// buildWorkingSet's score ordering already relies on elsewhere in this file).
+// buildWorkingSet's score ordering already relies on elsewhere in this file). Work-loop group +
+// augment-loop.js deliberately excluded - see the comment above, they get their own dedicated
+// launch block instead of this flat attempt-order list.
 const BN4_SINGULARITY_SCRIPTS = [
 	HOME_RAM_LOOP_SCRIPT,
 	HOME_CORES_LOOP_SCRIPT,
 	PROGRAM_BUY_LOOP_SCRIPT,
-	COMPANY_WORK_LOOP_SCRIPT,
-	FACTION_WORK_LOOP_SCRIPT,
 	// Moved to the end 2026-08-09 (user-directed, "for now"): at 35.90GB it dwarfs every other
 	// entry here (next-largest is home-cores-loop.js at 3.60GB), so cost-ascending attempt order
 	// alone already gives the cheaper siblings first crack most ticks - this just makes that
 	// explicit instead of leaving backdoor-loop.js competing from the middle of the list.
 	BACKDOOR_LOOP_SCRIPT,
 ];
+// See the work-loop group comment above. null until the first decision is made; updated only by
+// the launch block in main() (currentReserveGb's own call site only reads these, never writes).
+let activeWorkScript: string | null = null;
+let lastWorkTransitionAt = 0;
+// How long company-work-loop.js runs before faction-work-loop.js gets another shot at finding
+// eligible faction work (a newly joined/eligible faction can only be detected by trying it -
+// there's no cheap ns.* check for "is any joined faction currently accepting hacking work").
+const FACTION_PROBE_INTERVAL_MS = 300000;
+// How long to let a freshly-(re)launched faction-work-loop.js run before judging it isn't
+// finding work and falling back to company - long enough for a couple of its own 30s ticks to
+// join a faction and start work.
+const FACTION_GRACE_MS = 90000;
+
+function decideActiveWorkScript(ns: NS): string {
+	if (!ns.gang.inGang()) return CRIME_LOOP_SCRIPT;
+
+	const now = Date.now();
+	if (activeWorkScript === COMPANY_WORK_LOOP_SCRIPT) {
+		return now - lastWorkTransitionAt > FACTION_PROBE_INTERVAL_MS ? FACTION_WORK_LOOP_SCRIPT : COMPANY_WORK_LOOP_SCRIPT;
+	}
+
+	if (activeWorkScript === FACTION_WORK_LOOP_SCRIPT && now - lastWorkTransitionAt > FACTION_GRACE_MS) {
+		try {
+			const currentWork = ns.singularity.getCurrentWork();
+			const workingForFaction = currentWork !== null && currentWork.type === "FACTION";
+			if (!workingForFaction) return COMPANY_WORK_LOOP_SCRIPT;
+		} catch {
+			// Singularity unavailable - can't tell if faction work is actually happening; keep
+			// trying faction rather than assume failure.
+		}
+	}
+
+	return FACTION_WORK_LOOP_SCRIPT; // default first try / still within grace / confirmed working
+}
 // CORP_MANAGER_SCRIPT/CORP_WORKER_SCRIPTS/CORP_RAM_RESERVE_FRACTION: PAUSED (2026-08-06) along
 // with computeCorpReserveGb and the corp-manager.js launch block below - commented out (not
 // deleted) since nothing outside comments reads them while corp automation is paused for BN5.
@@ -271,13 +325,25 @@ function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	for (const script of BN4_SINGULARITY_SCRIPTS) {
 		bn4SingularityReserveGb += reserveIfAffordable(ns, script);
 	}
+	// Work-loop group reserve: only ever reserves for the ONE script decideActiveWorkScript says
+	// should be resident (not all three) - see that function's own comment for why running just
+	// one at a time is the point. augment-loop.js is additive on top since it isn't part of the
+	// exclusivity group (see AUGMENT_LOOP_SCRIPT's comment).
+	const workLoopReserveGb =
+		reserveIfAffordable(ns, decideActiveWorkScript(ns)) + (ns.gang.inGang() ? reserveIfAffordable(ns, AUGMENT_LOOP_SCRIPT) : 0);
 	// computeCorpReserveGb(ns) intentionally dropped from this sum (2026-08-04): corp automation
 	// paused while playing BN5 - flumed out of BN3 pre-augment via b1t_flum3.exe, see
 	// [[bitburner_bitnode_route]] memory. No point reserving RAM for a manager that isn't launched
 	// below anymore. Re-add `+ computeCorpReserveGb(ns)` here when the corp-manager.js launch block
 	// in main() (search CORP_MANAGER_SCRIPT) is re-enabled on returning to BN3.
 	return (
-		rescanLoopReserveGb + scanRootReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb + bn4SingularityReserveGb
+		rescanLoopReserveGb +
+		scanRootReserveGb +
+		serverTreeReserveGb +
+		serverPurchaseManagerReserveGb +
+		lowerPriorityReserveGb +
+		bn4SingularityReserveGb +
+		workLoopReserveGb
 	);
 }
 
@@ -1014,6 +1080,34 @@ export async function main(ns: NS): Promise<void> {
 				const pid = ns.run(script);
 				if (pid === 0) {
 					ns.print(`controller: still waiting for RAM to start ${script}`);
+				}
+			}
+
+			// Work-loop group: mutually exclusive (see decideActiveWorkScript's own comment) -
+			// kill whichever of the three isn't the desired one, then launch the desired one.
+			// augment-loop.js rides along unconditionally once gang exists (not part of the
+			// exclusivity group).
+			const desiredWorkScript = decideActiveWorkScript(ns);
+			if (desiredWorkScript !== activeWorkScript) {
+				lastWorkTransitionAt = Date.now();
+				activeWorkScript = desiredWorkScript;
+			}
+			for (const script of [CRIME_LOOP_SCRIPT, FACTION_WORK_LOOP_SCRIPT, COMPANY_WORK_LOOP_SCRIPT]) {
+				if (script !== desiredWorkScript && ns.isRunning(script, "home")) {
+					ns.kill(script, "home");
+				}
+			}
+			if (!ns.isRunning(desiredWorkScript, "home")) {
+				const pid = ns.run(desiredWorkScript);
+				if (pid === 0) {
+					ns.print(`controller: still waiting for RAM to start ${desiredWorkScript}`);
+				}
+			}
+
+			if (ns.gang.inGang() && !ns.isRunning(AUGMENT_LOOP_SCRIPT, "home")) {
+				const pid = ns.run(AUGMENT_LOOP_SCRIPT);
+				if (pid === 0) {
+					ns.print(`controller: still waiting for RAM to start ${AUGMENT_LOOP_SCRIPT}`);
 				}
 			}
 		}
