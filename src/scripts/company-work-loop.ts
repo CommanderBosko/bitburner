@@ -2,11 +2,11 @@ import type { NS } from "../NetscriptDefinitions";
 
 const COMPANY_WORK_LOOP_INTERVAL_MS = 30000;
 const FIELD = "Software";
-// Defensive backoff for any singularity.* call in the loop body failing (e.g. the
-// confirmed-live 2026-07-31 finding that upgradeHomeRam can error demanding SF4 even while
-// inside BN4 - see bitburner_singularity_locked memory - unconfirmed whether the calls here
-// share this, but built defensively either way). Back off far longer than the normal loop
-// interval so a recurring failure doesn't spam retries.
+// The 2026-07-31 finding that upgradeHomeRam could error demanding SF4 even inside BN4 (see
+// bitburner_singularity_locked memory) does NOT reproduce for the calls here either - confirmed
+// live 2026-08-09: this script got hired and started working inside BN4 with no errors. Kept
+// as general defensive insurance regardless. Back off far longer than the normal loop interval
+// so a recurring failure doesn't spam retries.
 const SINGULARITY_UNAVAILABLE_RETRY_MS = 300000;
 
 // Ordered by expMultiplier/salaryMultiplier descending, per jobs.md (sourced directly from

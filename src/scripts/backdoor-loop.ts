@@ -3,13 +3,13 @@ import type { ServerReport } from "../lib/types";
 import { buildParentMap, pathTo } from "../lib/network";
 
 const BACKDOOR_LOOP_INTERVAL_MS = 60000;
-// This repo now hardcodes a BN4 context for this script (see controller.ts's launch comment) -
-// docs say singularity.installBackdoor/connect should be gate-free while actually inside BN4,
-// but that claim is NOT fully trusted: a 2026-07-31 live test found upgradeHomeRam erroring
-// demanding SF4 even while inside BN4 (see bitburner_singularity_locked memory), and it's
-// unconfirmed whether that extends to the calls here. This try/catch is a general defensive
-// safety net for that open question, not specifically an "outside BitNode 4" detector. Back off
-// far longer than the normal loop interval so a recurring failure doesn't spam retries.
+// This repo hardcodes a BN4 context for this script (see controller.ts's launch comment). The
+// 2026-07-31 finding that upgradeHomeRam could error demanding SF4 even inside BN4 (see
+// bitburner_singularity_locked memory) does NOT reproduce here - confirmed live 2026-08-09, all
+// 5 BN4_SINGULARITY_SCRIPTS ran cleanly inside BN4, including this one's installBackdoor/connect
+// calls. The try/catch is kept anyway as cheap general insurance (it correctly caught a real,
+// unrelated bug the same session - see getRootedHosts' purchasedByPlayer filter). Back off far
+// longer than the normal loop interval so a recurring failure doesn't spam retries.
 const SINGULARITY_UNAVAILABLE_RETRY_MS = 300000;
 
 function getRootedHosts(ns: NS): string[] {
@@ -41,7 +41,12 @@ export async function main(ns: NS): Promise<void> {
 		let singularityUnavailable = false;
 
 		for (const host of hosts) {
-			if (ns.getServer(host).backdoorInstalled) continue;
+			const server = ns.getServer(host);
+			// purchasedByPlayer also covers "home" itself, if it were ever to show up in the
+			// rooted-hosts list - installBackdoor throws "Cannot backdoor <host> because it is
+			// your server" for any own server (purchased or home), confirmed live 2026-08-09
+			// against a pserv-* host once servers.json started including them.
+			if (server.backdoorInstalled || server.purchasedByPlayer) continue;
 
 			try {
 				await installBackdoorOn(ns, host, parents);

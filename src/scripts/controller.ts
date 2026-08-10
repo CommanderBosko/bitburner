@@ -15,13 +15,15 @@ const SCAN_ROOT_SCRIPT = "scripts/scan-root.js";
 const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
 // BN4 Singularity automation, hardcoded for a BN4 context (2026-08-09, user-directed - see
 // [[bitburner_bn4_singularity]]): every script here wraps its ns.singularity.* calls in
-// try/catch + a long backoff (see each script's own SINGULARITY_UNAVAILABLE_RETRY_MS), since a
-// 2026-07-31 live test found upgradeHomeRam erroring even while inside BN4 and it's unconfirmed
-// whether that extends to the others - the backoff is the agreed defensive answer rather than a
-// pre-verified guarantee. Their RAM reserves below use reserveIfAffordable, not the plain
-// isRunning-ternary the other reserves use, because at SF4 level 0 these can individually cost
-// more than home's entire max RAM (the singularity "RAM cost: X GB * 16/4/1" doc-comment tier) -
-// see that helper's comment for why a naive reserve would be actively harmful here.
+// try/catch + a long backoff (see each script's own SINGULARITY_UNAVAILABLE_RETRY_MS). A
+// 2026-07-31 live test had found upgradeHomeRam erroring even while inside BN4, but confirmed
+// live 2026-08-09 that this does NOT reproduce - all 5 scripts ran cleanly inside BN4 at native
+// RAM cost (no 16x multiplier despite SF4 level 0), so the try/catch is kept as cheap general
+// insurance rather than a load-bearing workaround (it did catch a real, unrelated bug the same
+// session - see backdoor-loop.ts's purchasedByPlayer filter). Their RAM reserves below still use
+// reserveIfAffordable, not the plain isRunning-ternary the other reserves use, purely as a
+// low-cost safety net in case that native-cost result doesn't hold in some other context (e.g.
+// outside BN4 without SF4.3) - see that helper's comment.
 const HOME_RAM_LOOP_SCRIPT = "scripts/home-ram-loop.js";
 const HOME_CORES_LOOP_SCRIPT = "scripts/home-cores-loop.js";
 const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";

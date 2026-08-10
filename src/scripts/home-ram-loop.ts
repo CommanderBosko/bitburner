@@ -1,10 +1,12 @@
 import type { NS } from "../NetscriptDefinitions";
 
 const HOME_RAM_LOOP_INTERVAL_MS = 30000;
-// Defensive backoff for upgradeHomeRam() failing (e.g. the confirmed-live 2026-07-31 finding
-// that it can error demanding SF4 even while inside BN4 - see bitburner_singularity_locked
-// memory). Back off far longer than the normal loop interval so a recurring failure doesn't
-// spam retries.
+// The 2026-07-31 finding that this call could error demanding SF4 even inside BN4 (see
+// bitburner_singularity_locked memory) does NOT reproduce - confirmed live 2026-08-09: this
+// script bought RAM (32GB -> 64GB) cleanly on its first tick inside BN4. Kept as general
+// defensive insurance regardless (cheap, and the same session's backdoor-loop.js catch proved
+// the pattern is worth keeping even when this specific anomaly isn't the cause). Back off far
+// longer than the normal loop interval so a recurring failure doesn't spam retries.
 const SINGULARITY_UNAVAILABLE_RETRY_MS = 300000;
 
 export async function main(ns: NS): Promise<void> {
