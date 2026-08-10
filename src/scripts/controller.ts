@@ -29,10 +29,22 @@ const HOME_CORES_LOOP_SCRIPT = "scripts/home-cores-loop.js";
 const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";
 const COMPANY_WORK_LOOP_SCRIPT = "scripts/company-work-loop.js";
 const FACTION_WORK_LOOP_SCRIPT = "scripts/faction-work-loop.js";
+// program-buy-loop.js added 2026-08-09 (user-directed, same day as the revival above) after
+// confirming no script bought the TOR router / port-opener .exe programs at all - see
+// [[bitburner_bn4_singularity]]. Native cost ~4.55GB (hasTorRouter 0.05 + purchaseTor 2 +
+// getDarkwebPrograms 0.5 + purchaseProgram 2), same cheap tier as HOME_CORES_LOOP_SCRIPT.
+const PROGRAM_BUY_LOOP_SCRIPT = "scripts/program-buy-loop.js";
 // Cost-ascending: on a tick where only a partial subset is affordable, this gives the cheaper
 // scripts first crack via attempt order alone - a soft priority, not a hard gate (same principle
 // buildWorkingSet's score ordering already relies on elsewhere in this file).
-const BN4_SINGULARITY_SCRIPTS = [HOME_RAM_LOOP_SCRIPT, HOME_CORES_LOOP_SCRIPT, BACKDOOR_LOOP_SCRIPT, COMPANY_WORK_LOOP_SCRIPT, FACTION_WORK_LOOP_SCRIPT];
+const BN4_SINGULARITY_SCRIPTS = [
+	HOME_RAM_LOOP_SCRIPT,
+	HOME_CORES_LOOP_SCRIPT,
+	PROGRAM_BUY_LOOP_SCRIPT,
+	BACKDOOR_LOOP_SCRIPT,
+	COMPANY_WORK_LOOP_SCRIPT,
+	FACTION_WORK_LOOP_SCRIPT,
+];
 // CORP_MANAGER_SCRIPT/CORP_WORKER_SCRIPTS/CORP_RAM_RESERVE_FRACTION: PAUSED (2026-08-06) along
 // with computeCorpReserveGb and the corp-manager.js launch block below - commented out (not
 // deleted) since nothing outside comments reads them while corp automation is paused for BN5.
