@@ -13,6 +13,24 @@ const SERVER_TREE_SCRIPT = "scripts/server-tree.js";
 const RESCAN_LOOP_SCRIPT = "scripts/rescan-loop.js";
 const SCAN_ROOT_SCRIPT = "scripts/scan-root.js";
 const GANG_MANAGER_SCRIPT = "scripts/gang-manager.js";
+// BN4 Singularity automation, hardcoded for a BN4 context (2026-08-09, user-directed - see
+// [[bitburner_bn4_singularity]]): every script here wraps its ns.singularity.* calls in
+// try/catch + a long backoff (see each script's own SINGULARITY_UNAVAILABLE_RETRY_MS), since a
+// 2026-07-31 live test found upgradeHomeRam erroring even while inside BN4 and it's unconfirmed
+// whether that extends to the others - the backoff is the agreed defensive answer rather than a
+// pre-verified guarantee. Their RAM reserves below use reserveIfAffordable, not the plain
+// isRunning-ternary the other reserves use, because at SF4 level 0 these can individually cost
+// more than home's entire max RAM (the singularity "RAM cost: X GB * 16/4/1" doc-comment tier) -
+// see that helper's comment for why a naive reserve would be actively harmful here.
+const HOME_RAM_LOOP_SCRIPT = "scripts/home-ram-loop.js";
+const HOME_CORES_LOOP_SCRIPT = "scripts/home-cores-loop.js";
+const BACKDOOR_LOOP_SCRIPT = "scripts/backdoor-loop.js";
+const COMPANY_WORK_LOOP_SCRIPT = "scripts/company-work-loop.js";
+const FACTION_WORK_LOOP_SCRIPT = "scripts/faction-work-loop.js";
+// Cost-ascending: on a tick where only a partial subset is affordable, this gives the cheaper
+// scripts first crack via attempt order alone - a soft priority, not a hard gate (same principle
+// buildWorkingSet's score ordering already relies on elsewhere in this file).
+const BN4_SINGULARITY_SCRIPTS = [HOME_RAM_LOOP_SCRIPT, HOME_CORES_LOOP_SCRIPT, BACKDOOR_LOOP_SCRIPT, COMPANY_WORK_LOOP_SCRIPT, FACTION_WORK_LOOP_SCRIPT];
 // CORP_MANAGER_SCRIPT/CORP_WORKER_SCRIPTS/CORP_RAM_RESERVE_FRACTION: PAUSED (2026-08-06) along
 // with computeCorpReserveGb and the corp-manager.js launch block below - commented out (not
 // deleted) since nothing outside comments reads them while corp automation is paused for BN5.
@@ -204,6 +222,23 @@ function syncWorkerScripts(ns: NS, hosts: string[], synced: Set<string>): void {
 // 	return Math.min(measuredNeedGb, ns.getServerMaxRam("home") * CORP_RAM_RESERVE_FRACTION);
 // }
 
+// A script whose live cost already exceeds home's entire current max RAM can never launch this
+// tick regardless of how much gets reserved for it - reserving anyway would zero out the whole
+// home budget (via computeFreeRam's Math.max(0, ...) clamp) for a launch that's structurally
+// impossible, starving every other manager and the hack/grow/weaken engine for nothing. None of
+// the previously-reserved scripts ever needed this guard (max ~36GB for gang-manager.js against
+// any plausible home size) - only relevant here because the BN4_SINGULARITY_SCRIPTS below can
+// individually cost 50GB+ at SF4 level 0 (the 16x tier in every ns.singularity.* function's "RAM
+// cost: X GB * 16/4/1" doc comment - see [[bitburner_bn4_singularity]]). ns.run's own free-RAM
+// check already no-ops harmlessly every tick until home grows past a given script's cost, same
+// as it does for every other manager here - this only prevents that natural "not yet" from also
+// wasting the reservation of every OTHER script in the same tick.
+function reserveIfAffordable(ns: NS, script: string): number {
+	if (ns.isRunning(script, "home")) return 0;
+	const cost = ns.getScriptRam(script, "home");
+	return cost < ns.getServerMaxRam("home") ? cost : 0;
+}
+
 function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 	const rescanLoopReserveGb = ns.isRunning(RESCAN_LOOP_SCRIPT, "home") ? 0 : ns.getScriptRam(RESCAN_LOOP_SCRIPT, "home");
 	const scanRootReserveGb = ns.isRunning(SCAN_ROOT_SCRIPT, "home") ? 0 : ns.getScriptRam(SCAN_ROOT_SCRIPT, "home");
@@ -214,12 +249,18 @@ function currentReserveGb(ns: NS, serverTreeReserveGb: number): number {
 			if (!ns.isRunning(script, "home")) lowerPriorityReserveGb += ns.getScriptRam(script, "home");
 		}
 	}
+	let bn4SingularityReserveGb = 0;
+	for (const script of BN4_SINGULARITY_SCRIPTS) {
+		bn4SingularityReserveGb += reserveIfAffordable(ns, script);
+	}
 	// computeCorpReserveGb(ns) intentionally dropped from this sum (2026-08-04): corp automation
 	// paused while playing BN5 - flumed out of BN3 pre-augment via b1t_flum3.exe, see
 	// [[bitburner_bitnode_route]] memory. No point reserving RAM for a manager that isn't launched
 	// below anymore. Re-add `+ computeCorpReserveGb(ns)` here when the corp-manager.js launch block
 	// in main() (search CORP_MANAGER_SCRIPT) is re-enabled on returning to BN3.
-	return rescanLoopReserveGb + scanRootReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb;
+	return (
+		rescanLoopReserveGb + scanRootReserveGb + serverTreeReserveGb + serverPurchaseManagerReserveGb + lowerPriorityReserveGb + bn4SingularityReserveGb
+	);
 }
 
 function computeFreeRam(ns: NS, hosts: string[], homeReserveGb: number): Map<string, number> {
@@ -897,16 +938,6 @@ export async function main(ns: NS): Promise<void> {
 			);
 		}
 
-		// home-ram-loop.js/home-cores-loop.js are deliberately NOT chain-launched: split out
-		// (2026-08-06) from the single home-upgrade-loop.js that used to combine both calls -
-		// `mem scripts/home-upgrade-loop.js` had confirmed in-game it cost 99.65GB combined
-		// (upgradeHomeRam and upgradeHomeCores are each 48GB without SF4's multiplier reduction -
-		// the 16x tier in their "RAM cost: X GB * 16/4/1" doc comments), so split each now costs
-		// roughly half that alone (not yet reverified live via mem). Regardless of the split,
-		// upgradeHomeRam additionally errors outright without owning SF4 at all - not just an
-		// inflated cost. Since SF4 is only granted by completing BitNode 4, neither script can run
-		// yet regardless of home RAM or free capacity. Run them by hand later, once SF4 is owned.
-
 		// corp-manager.js: PAUSED (2026-08-04) - abandoned BN3 pre-augment via b1t_flum3.exe to run
 		// BN5 first (Intelligence/Formulas.exe), see [[bitburner_bitnode_route]]. BN3's corp has
 		// nothing to do while out of that BitNode. Re-enable by uncommenting this block (and the
@@ -947,20 +978,34 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
+		// BN4_SINGULARITY_SCRIPTS re-wired 2026-08-09 (see the constant's own comment above for
+		// the hardcoded-BN4 rationale and each script's own try/catch backoff for the still-open
+		// 07-31 question) - gated only on rescan-loop.js being up, same boot-race-avoidance
+		// rationale as server-purchase-manager.js above, deliberately NOT behind the same 64GB
+		// lower-priority RAM threshold used below: that gate would be circular for
+		// home-ram-loop.js (it's what's supposed to help reach the threshold) and simply
+		// undersized for the rest (several of these can individually cost more than 64GB at SF4
+		// level 0 - see reserveIfAffordable's comment). ns.run's own free-RAM check each tick
+		// already decides real launchability, same as every other manager here. Independent
+		// siblings, not chained to each other's running-state like gang->hacknet/darknet below -
+		// their cost tiers are far enough apart that attempt order alone (cost-ascending, see
+		// BN4_SINGULARITY_SCRIPTS) is enough of a soft priority.
+		if (ns.isRunning(RESCAN_LOOP_SCRIPT, "home")) {
+			for (const script of BN4_SINGULARITY_SCRIPTS) {
+				if (ns.isRunning(script, "home")) continue;
+				const pid = ns.run(script);
+				if (pid === 0) {
+					ns.print(`controller: still waiting for RAM to start ${script}`);
+				}
+			}
+		}
+
 		// hacknet-manager.js/darknet-manager.js/gang-manager.js still wait for home RAM to clear
 		// the threshold before even attempting to launch, so they can never compete with
 		// scan-loop/controller/weaken-grow-hack (or server-purchase-manager.js) for RAM while home
 		// is this tight. Moved here from rescan-loop.js (2026-07-30) - they were never actually
 		// about rescanning, just riding along on rescan-loop.js's always-alive loop; controller.js's
 		// own dispatch-loop tick is the natural home for every lower-priority manager launch.
-		// backdoor-loop.js is NOT included here (removed 2026-07-31): both
-		// singularity.installBackdoor and singularity.connect require Source-File 4 outside
-		// BitNode 4 - same hard gate confirmed for singularity.upgradeHomeRam/upgradeHomeCores
-		// (see the home-ram-loop.js/home-cores-loop.js comment above) - so it can't do anything
-		// useful yet.
-		// company-work-loop.js is likewise excluded (removed 2026-07-31): confirmed in-game that
-		// ns.singularity.applyToCompany/workForCompany also hard-error without SF4, same gate as
-		// the other singularity.* calls above. Run both by hand later, once SF4 is owned.
 		//
 		// gang-manager.js gets a real (not just attempt-order) priority over hacknet/darknet
 		// (2026-08-04, user-directed): hacknet-manager.js/darknet-manager.js are only even

@@ -16,7 +16,11 @@
 //   3. A NAME only counts as an actual chain-launch edge (not just any
 //      reference, e.g. ns.getScriptRam) if it appears either directly next to
 //      ns.run(/ns.isRunning(/runWithRetry( on the same line, or inside a
-//      `for (const x of [A, B, C])` array that's later iterated with ns.run.
+//      `for (const x of [A, B, C])` array that's later iterated with ns.run,
+//      or inside a `for (const x of ARRAY_NAME)` where ARRAY_NAME is itself a
+//      single-line `const ARRAY_NAME = [A, B, C];` declaration (matches this
+//      repo's WORKER_SCRIPTS/BN4_SINGULARITY_SCRIPTS style of naming a reused
+//      script list once instead of inlining it at every call site).
 //
 // This is a heuristic over the specific patterns this repo already uses for
 // every real chain-launch site - not a general TS/AST analysis.
@@ -41,9 +45,11 @@ function ramLabel(name) {
 }
 
 const constDeclPattern = /const\s+([A-Za-z0-9_]+)\s*=\s*"scripts\/([A-Za-z0-9_-]+)\.js"\s*;/;
+const arrayConstDeclPattern = /const\s+([A-Za-z0-9_]+)\s*=\s*\[([^\]]*)\]\s*;/;
 const gateCallPattern = /hasEnoughHomeRam\s*\(/;
 const directLaunchPattern = /\bns\.run\s*\(|\bns\.isRunning\s*\(|\brunWithRetry\s*\(/;
 const forOfArrayPattern = /for\s*\(\s*const\s+\w+\s+of\s+\[([^\]]*)\]\s*\)/;
+const forOfIdentPattern = /for\s*\(\s*const\s+\w+\s+of\s+([A-Za-z0-9_]+)\s*\)/;
 
 function analyzeFile(tsPath) {
 	// Returns Map<targetScriptName, { gated: boolean }>
@@ -58,6 +64,22 @@ function analyzeFile(tsPath) {
 	}
 	if (constMap.size === 0) return edges;
 
+	// Second pass (needs constMap fully built first): single-line `const ARRAY_NAME = [A, B, C];`
+	// declarations whose members are all known script-name consts - e.g.
+	// `const BN4_SINGULARITY_SCRIPTS = [HOME_RAM_LOOP_SCRIPT, ...];`. Only resolved to member
+	// *names* here; whether each member becomes a real edge still goes through record() below,
+	// same as the inline-array-literal case.
+	const arrayConstMap = new Map();
+	for (const line of lines) {
+		const m = line.match(arrayConstDeclPattern);
+		if (!m) continue;
+		const members = m[2]
+			.split(",")
+			.map((s) => s.trim())
+			.filter((s) => constMap.has(s));
+		if (members.length > 0) arrayConstMap.set(m[1], members);
+	}
+
 	const escaped = [...constMap.keys()].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 	const nameWordPattern = new RegExp(`\\b(${escaped.join("|")})\\b`, "g");
 
@@ -71,6 +93,11 @@ function analyzeFile(tsPath) {
 
 	let depth = 0;
 	const gateStack = [];
+	// True from the line a hasEnoughHomeRam(...) call is seen until the line whose own opening
+	// brace(s) actually start that block - needed because this repo's real gate conditions are
+	// multi-line (`if (\n  ...\n  hasEnoughHomeRam(...) &&\n  ...\n) {`), so the `{` is often
+	// several lines after the call itself, not on the same line.
+	let pendingGate = false;
 
 	for (const line of lines) {
 		const gatedNow = gateStack.length > 0;
@@ -91,12 +118,25 @@ function analyzeFile(tsPath) {
 			}
 		}
 
+		const identMatch = line.match(forOfIdentPattern);
+		if (identMatch && arrayConstMap.has(identMatch[1])) {
+			for (const name of arrayConstMap.get(identMatch[1])) {
+				record(name, gatedNow);
+			}
+		}
+
+		if (gateCallPattern.test(line)) pendingGate = true;
+
 		const opens = (line.match(/{/g) || []).length;
 		const closes = (line.match(/}/g) || []).length;
-		if (gateCallPattern.test(line)) {
-			gateStack.push(depth + opens);
-		}
 		depth += opens - closes;
+		// Push once the pending gate's block has actually opened (this line's own `{` fired),
+		// using the post-increment depth - i.e. the depth level *inside* that block - so the pop
+		// condition below fires exactly on the matching close, not one level too shallow.
+		if (pendingGate && opens > 0) {
+			gateStack.push(depth);
+			pendingGate = false;
+		}
 		while (gateStack.length && depth < gateStack[gateStack.length - 1]) gateStack.pop();
 	}
 

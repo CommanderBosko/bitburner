@@ -3,8 +3,13 @@ import type { ServerReport } from "../lib/types";
 import { buildParentMap, pathTo } from "../lib/network";
 
 const BACKDOOR_LOOP_INTERVAL_MS = 60000;
-// singularity.installBackdoor/connect throw if Source-File 4 isn't owned (outside BitNode 4).
-// Back off far longer than the normal loop interval so a missing SF4 doesn't spam retries.
+// This repo now hardcodes a BN4 context for this script (see controller.ts's launch comment) -
+// docs say singularity.installBackdoor/connect should be gate-free while actually inside BN4,
+// but that claim is NOT fully trusted: a 2026-07-31 live test found upgradeHomeRam erroring
+// demanding SF4 even while inside BN4 (see bitburner_singularity_locked memory), and it's
+// unconfirmed whether that extends to the calls here. This try/catch is a general defensive
+// safety net for that open question, not specifically an "outside BitNode 4" detector. Back off
+// far longer than the normal loop interval so a recurring failure doesn't spam retries.
 const SINGULARITY_UNAVAILABLE_RETRY_MS = 300000;
 
 function getRootedHosts(ns: NS): string[] {
