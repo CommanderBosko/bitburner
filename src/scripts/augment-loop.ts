@@ -66,9 +66,10 @@ function buyCandidates(ns: NS, candidates: Candidate[], budget: number): { spent
 	return { spent, purchasedAny };
 }
 
-// NeuroFlux Governor is repeatable with an infinitely-scaling price - once every real (one-time)
-// augmentation is bought or unaffordable, dump whatever budget remains into it rather than
-// letting it sit idle, since NFG is the only thing left to spend on at that point.
+// NeuroFlux Governor is repeatable with an infinitely-scaling price - dumps whatever budget it's
+// given into repeat purchases. Callers decide *whether* to call this at all (see canBuyNfg in
+// main): NFG is cheap and always affordable early, so calling it unconditionally would drain the
+// budget every tick before it could ever accumulate enough for a pricier real augmentation.
 function buyNeuroFlux(ns: NS, factions: FactionName[], remainingBudget: number): { spent: number; purchasedAny: boolean } {
 	const faction = factions.find(
 		(f) => ns.singularity.getAugmentationsFromFaction(f).includes(NEUROFLUX_NAME) && ns.singularity.getFactionRep(f) >= ns.singularity.getAugmentationRepReq(NEUROFLUX_NAME),
@@ -100,13 +101,27 @@ export async function main(ns: NS): Promise<void> {
 		}
 
 		try {
-			const owned = new Set(ns.singularity.getOwnedAugmentations(true));
+			const installedList = ns.singularity.getOwnedAugmentations(false);
+			const ownedList = ns.singularity.getOwnedAugmentations(true);
+			const installedBefore = new Set(installedList);
+			const owned = new Set(ownedList);
+			// A non-NFG augmentation already sitting in the queue (purchased an earlier tick, not
+			// yet installed) - see canBuyNfg below.
+			const queuedHasReal = ownedList.some((name) => name !== NEUROFLUX_NAME && !installedBefore.has(name));
+
 			const factions = ns.getPlayer().factions;
 			const budget = ns.getPlayer().money * (1 - RESERVE_FRACTION);
 
 			const candidates = collectCandidates(ns, factions, owned);
 			const real = buyCandidates(ns, candidates, budget);
-			const nfg = buyNeuroFlux(ns, factions, budget - real.spent);
+
+			// Only spend on NeuroFlux once a real augmentation is already queued (this tick's
+			// purchase above, or an earlier tick's) or there's nothing real left to save toward
+			// (candidates empty) - otherwise NFG's cheap, always-affordable price drains the budget
+			// every tick before it can ever reach a pricier real augment, and installs end up
+			// NFG-only (the bug this guards against).
+			const canBuyNfg = real.purchasedAny || queuedHasReal || candidates.length === 0;
+			const nfg = canBuyNfg ? buyNeuroFlux(ns, factions, budget - real.spent) : { spent: 0, purchasedAny: false };
 			const purchasedAny = real.purchasedAny || nfg.purchasedAny;
 
 			// Nothing more purchasable this tick and something's queued - cash in the batch.
