@@ -13,7 +13,7 @@ This repo's bootstrap is a self-assembling chain: each persistent script chain-l
 ## Arguments
 
 - **Script to move** — must already be chain-launched somewhere in `src/scripts/*.ts` (i.e. a `<NAME>_SCRIPT` constant and an `if (!ns.isRunning(<NAME>_SCRIPT, "home"))` block referencing it already exist). Required.
-- **Target file and position** — which script's `main()` should launch it now, and where. Default position (matches repo convention): after that file's existing chain-launch calls, before its own early-return logic and `while (true)` loop. Ask if the user wants a different position. Required.
+- **Target file and position** — which script's `main()` should launch it now, and where. Required. If the user's request doesn't already say where, ask via **AskUserQuestion**: `Default position` (matches repo convention — after that file's existing chain-launch calls, before its own early-return logic and `while (true)` loop) vs `Custom position` (free text, e.g. "before the RAM-gated managers").
 
 ## Steps
 

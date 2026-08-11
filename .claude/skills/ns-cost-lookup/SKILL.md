@@ -10,6 +10,10 @@ Look up the exact documented RAM cost of one or more `ns.*` Netscript functions 
 
 This exists because doing this lookup by hand (`grep`/`sed` for a function name, then guess a line-offset window above it for the RAM cost comment) has repeatedly gone wrong in this project's history: the wrong overload or an unrelated same-named declaration elsewhere in the 8000+ line file gets matched, or the search window misses the actual `RAM cost:` line because a function's JSDoc block is longer than expected (confirmed 2026-07-19: manually investigating `print()` mid-session concluded — wrongly — that it had no RAM cost line, when it does, just outside the window that was read by hand).
 
+## Arguments
+
+- **Function name(s)** — one or more `ns.*` members, bare (e.g. `exec`) or one-level dotted (e.g. `hacknet.purchaseNode`). Required, space-separated; see Step 1.
+
 ## Step 1 — Run the lookup
 
 From the repo root, run:
@@ -31,7 +35,7 @@ The process exits non-zero if any requested name was unresolved — treat that a
 
 ## Step 3 — Offer to update ram-audit's cost table
 
-If any of the looked-up costs are for functions **not already present** in `.claude/skills/ram-audit/assets/ram-costs.json` (check the file — costs are keyed by dot-separated path, e.g. `"hacknet.purchaseNode"`), ask the user whether to add them, so future `ram-audit` runs include them. If yes, add each as a new key with the exact GB value from Step 1's output (skip any that came back `NOT FOUND` or with the no-RAM-cost-line caveat unless the user explicitly confirms treating it as 0).
+If any of the looked-up costs are for functions **not already present** in `.claude/skills/ram-audit/assets/ram-costs.json` (check the file — costs are keyed by dot-separated path, e.g. `"hacknet.purchaseNode"`), ask via **AskUserQuestion** whether to add them (`Add to ram-costs.json` / `Skip`), so future `ram-audit` runs include them. If yes, add each as a new key with the exact GB value from Step 1's output (skip any that came back `NOT FOUND` or with the no-RAM-cost-line caveat unless the user explicitly confirms treating it as 0).
 
 ## Notes
 
