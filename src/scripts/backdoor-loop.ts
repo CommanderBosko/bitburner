@@ -41,6 +41,18 @@ async function installBackdoorOn(ns: NS, host: string, parents: Map<string, stri
 	}
 }
 
+// Safety net for the case installBackdoorOn's own return-trip never ran (installBackdoor() threw
+// mid-pass, e.g. the singularityUnavailable branch below) - without this the script stays stranded
+// wherever it was connected and the next pass's home-rooted path hops break. No-op if already home.
+async function returnHome(ns: NS, parents: Map<string, string>): Promise<void> {
+	const current = ns.singularity.getCurrentServer();
+	if (current === "home") return;
+	const path = pathTo(parents, current);
+	for (const hop of [...path].reverse().slice(1)) {
+		ns.singularity.connect(hop);
+	}
+}
+
 export async function main(ns: NS): Promise<void> {
 	ns.print("backdoor-loop: starting");
 
@@ -63,6 +75,7 @@ export async function main(ns: NS): Promise<void> {
 			}
 		}
 
+		await returnHome(ns, parents);
 		await ns.sleep(singularityUnavailable ? SINGULARITY_UNAVAILABLE_RETRY_MS : BACKDOOR_LOOP_INTERVAL_MS);
 	}
 }
