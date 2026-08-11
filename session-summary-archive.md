@@ -1,3 +1,30 @@
+## Session: 2026-08-04 (night) — BitNode 3 → BitNode 5 pivot; gang-manager.js given real RAM priority over hacknet/darknet
+
+_Older entries are in [session-summary-archive.md](session-summary-archive.md)._
+
+**Focus**: This close spans two unclosed sessions plus the live one — no `session-closer` ran between the last close (`e986006`, 15:26) and now, so it covers the karma.ts add, the BN3→BN5 pivot, and this session's gang-manager RAM-priority fix, in that order.
+
+### What changed (and why)
+- Added `karma.ts`, a one-line diagnostic (`ns.tprint` of `ns.getPlayer().karma`) — karma isn't shown anywhere in the game UI, and the `Player` object already has it directly, simpler than the Singularity-gated `ns.heart.break()` alternative.
+- Discovered BN5 (Intelligence) hadn't actually been cleared yet — a misremembering from an earlier BitNode-order planning session — and abandoned BN3 for now to run BN5 first, per the researched order in `[[bitburner_bitnode_route]]`. Left BN3 pre-augment via `b1t_flum3.exe`; `corp-manager.js`'s launch and its RAM-reserve term in `controller.ts` were commented out (not deleted) and marked `PAUSED`. Ran `/research` for a BN5 kickoff strategy (7 sources) — conclusion: no BN5-specific script work needed, just keep playing normally (existing hacking automation + already-live `gang-manager.js`), destroy the node for real this time (not flume) to actually earn SF5.
+- That same BN5 planning pass flagged, as a non-blocking caveat, that the known `gang-manager.js`-vs-`hacknet-manager.js` RAM squeeze would likely resurface once corp's reservation was gone. It did, within the same day: user reported `gang-manager.js` (36.10GB) simply wasn't launching while the two smaller managers were. Root-caused to attempt-order not being real priority — `ns.run()` checks live free RAM independently of try-order, so the two cheaper managers (10.6GB combined) could and did launch on RAM the 36.10GB gang-manager.js couldn't use, then sat resident forever. Fixed by gating hacknet/darknet's launch *attempt* on gang-manager.js already being confirmed running.
+
+### Decisions
+- Paused BN3 by commenting out its launch block rather than deleting any of the completed 9-step build — re-enabling later is a one-line uncomment.
+- Chose a structural attempt-gate (hacknet/darknet wait for gang to be running first) over any softer fix, per the user's explicit requirement that gang have real priority — accepted trade-off: hacknet/darknet start-up now waits behind gang whenever home RAM is tight.
+
+### Issues / surprises
+- The already-resident `hacknet-manager.js`/`darknet-manager.js` don't self-evict — the code fix only stops *future* launches from cutting in line, so a one-time manual `kill` of both in-game was needed to let gang-manager.js actually claim the freed RAM. User confirmed it worked after that nudge; a full unattended cold-restart hasn't separately confirmed the fix holds without the nudge.
+- No `session-closer` had run since `e986006` (15:26) despite three intervening commits across two separate unclosed sessions before this one — same gap-accumulation pattern flagged as a risk in the prior close's "Next session" notes.
+
+### Next session
+- Watch `gang-manager.js` survive a real cold restart unattended, to confirm the RAM-priority fix is durable and not just a one-off after the manual kill.
+- Otherwise just play BN5 normally — no dedicated script work planned. See `project-state.md` for full detail.
+
+**Commits**: `459c2e9`..`9a44b97` (3 commits, plus this close-out's doc commit)
+
+---
+
 ## Session: 2026-08-04 (continued) — BN3 Corporation automation ("Bosko Industries") complete: Steps 7-9 live-verified, all 9 steps done
 
 **Focus**: Pick up exactly where the earlier 2026-08-04 session left off — reverify Step 7's livelock fix live, then build and verify Steps 8 and 9 to finish the 9-step BN3 corp automation plan.
