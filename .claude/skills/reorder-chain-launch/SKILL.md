@@ -8,7 +8,7 @@ model: haiku
 
 Move an already-wired script's chain-launch call from its current site to a different one in the boot chain. (Bucket: Utility)
 
-This repo's bootstrap (`scan-root.ts -> controller.ts -> hacknet-manager.ts -> rescan-loop.ts -> backdoor-loop.ts -> ...`) is a self-assembling chain: each persistent script chain-launches the next one itself, at the top of its `main()`, and exactly one script carries a `// CHAIN-TAIL` marker comment right before its `while (true) {` line (see `new-background-loop`'s SKILL.md for the full convention this mirrors). Sometimes a script needs to launch from a different point than where it was originally wired — e.g. a RAM-cheap dashboard script needs to start *before* another script sizes thread batches against "remaining" RAM, not after the whole chain has already booted.
+This repo's bootstrap is a self-assembling chain: each persistent script chain-launches the next one itself, at the top of its `main()`, and exactly one script carries a `// CHAIN-TAIL` marker comment right before its `while (true) {` line (see `new-background-loop`'s SKILL.md for the full convention this mirrors). The exact sequence has grown and reordered several times already — don't treat any specific chain as fixed; run `.claude/skills/boot-chain/scripts/boot-chain.mjs` or grep for `// CHAIN-TAIL` (step 1 below) to see the current real wiring rather than trusting a hardcoded example. Sometimes a script needs to launch from a different point than where it was originally wired — e.g. a RAM-cheap dashboard script needs to start *before* another script sizes thread batches against "remaining" RAM, not after the whole chain has already booted.
 
 ## Arguments
 

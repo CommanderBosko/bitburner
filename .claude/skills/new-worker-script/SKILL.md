@@ -18,7 +18,7 @@ Scaffold a new single-purpose Bitburner worker script under `src/scripts/` that 
 
 1. Ask the user for the script name (free-form) and the `ns` method (free-form). For the target-argument question, use the **AskUserQuestion** tool with two options — "Takes a target (ns.args[0])" and "No argument (e.g. ns.share())" — rather than free-form prose, since it's a binary choice.
 
-2. Before writing, read `src/scripts/hack.ts`, `src/scripts/grow.ts`, and `src/scripts/weaken.ts` in this repo to reconfirm the pattern hasn't drifted from what `scripts/new-worker-script.sh` generates (see step 3). As of writing, all three are byte-identical apart from the method name, using **tab** indentation:
+2. Before writing, read `src/scripts/hack.ts`, `src/scripts/grow.ts`, and `src/scripts/weaken.ts` in this repo to reconfirm the pattern hasn't drifted from what `.claude/skills/new-worker-script/scripts/new-worker-script.sh` generates (see step 3). As of writing, all three are byte-identical apart from the method name, using **tab** indentation:
    ```ts
    import type { NS } from "../NetscriptDefinitions";
 
@@ -33,9 +33,9 @@ Scaffold a new single-purpose Bitburner worker script under `src/scripts/` that 
 
 3. Run:
    ```bash
-   scripts/new-worker-script.sh <name> <method> [--no-target]
+   .claude/skills/new-worker-script/scripts/new-worker-script.sh <name> <method> [--no-target]
    ```
-   (a plain relative path works — this is a project-local skill, so Claude's working directory is already the repo root). Pass `--no-target` only if the user picked "No argument" in step 1. The script refuses to overwrite an existing file and validates `<name>` is kebab-case; if it exits non-zero, relay its error and fix the underlying issue (rename, or pick a different method) before retrying.
+   (relative to the repo root, which is Claude's working directory — the script lives inside this skill's own directory, not under a top-level `scripts/`). Pass `--no-target` only if the user picked "No argument" in step 1. The script refuses to overwrite an existing file and validates `<name>` is kebab-case; if it exits non-zero, relay its error and fix the underlying issue (rename, or pick a different method) before retrying.
 
 4. Do **not** attempt to auto-wire the new script into `src/scripts/controller.ts`. This is a deliberate, documented exception, not an oversight: `controller.ts`'s dispatch loop is a fixed 3-branch if/else (weaken → grow → hack) implementing one specific strategy decision tree (security-down → money-up → hack), not an open-ended launch chain like the `scan-root.ts` → `controller.ts` → `hacknet-manager.ts` → `rescan-loop.ts` bootstrap. Forcing a 4th branch into `controller.ts` without knowing the intended trigger condition (when should this new script run instead of one of the other three?) would just be guessing wrong.
 
@@ -51,4 +51,8 @@ Scaffold a new single-purpose Bitburner worker script under `src/scripts/` that 
 
 ## Scripts
 
-- `scripts/new-worker-script.sh <name> <method> [--no-target]` — Step 3's file generation. Validates `<name>` is kebab-case, refuses to overwrite an existing `src/scripts/<name>.ts`, and writes the with-target (target + `additionalMsec` delay, tab-indented, matching `hack.ts`/`grow.ts`/`weaken.ts`) or no-target template depending on `--no-target`. Exits non-zero with a diagnostic message on validation failure or an existing file.
+- `.claude/skills/new-worker-script/scripts/new-worker-script.sh <name> <method> [--no-target]` — Step 3's file generation. Validates `<name>` is kebab-case, refuses to overwrite an existing `src/scripts/<name>.ts`, and writes the with-target (target + `additionalMsec` delay, tab-indented, matching `hack.ts`/`grow.ts`/`weaken.ts`) or no-target template depending on `--no-target`. Exits non-zero with a diagnostic message on validation failure or an existing file.
+
+## Gotchas
+
+- **Step 3's path was previously wrong** — it read `scripts/new-worker-script.sh` (repo-root-relative), but the generator actually lives inside this skill's own directory. Confirmed failing in-session with `No such file or directory` before the fix. Always use the path shown above, relative to the repo root.

@@ -10,7 +10,6 @@ PROGRAM="$1"
 BASE_NAME="${PROGRAM%.exe}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 DEFS_FILE="$REPO_ROOT/src/NetscriptDefinitions.d.ts"
-NETWORK_FILE="$REPO_ROOT/src/lib/network.ts"
 
 echo "=== ProgramName enum entry (NetscriptDefinitions.d.ts) ==="
 grep -n -F "\"$PROGRAM\"" "$DEFS_FILE" || echo "(not found — check the exact spelling)"

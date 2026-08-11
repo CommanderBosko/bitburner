@@ -32,7 +32,7 @@ None.
 
 ## Instructions
 
-1. Run `scripts/secret-scan.sh`. It performs four passes:
+1. Run `.claude/skills/secret-scan/scripts/secret-scan.sh` (relative to the repo root — Claude's working directory for project-local skills; the bare `scripts/secret-scan.sh` does not resolve). It performs four passes:
    - **Working tree** — high-signal patterns (private-key blocks, password hashes,
      GitHub/AWS/Slack tokens) across tracked files, excluding the configured paths.
    - **Encrypted-secret integrity** — skipped; this project has no encrypted-secret scheme.
@@ -63,10 +63,10 @@ None.
 - Purely read-only; never modifies files or git state.
 - Pattern-based, so it's a strong guard, not a proof of absence. Treat a clean result as
   "no high-signal leaks found," and still apply judgment for project-specific secrets.
-- To add a new secret pattern, edit `EXTRA_PATTERNS` in `scripts/secret-scan.sh`.
+- To add a new secret pattern, edit `EXTRA_PATTERNS` in `.claude/skills/secret-scan/scripts/secret-scan.sh`.
 
 ## Script
 
 ```
-scripts/secret-scan.sh
+.claude/skills/secret-scan/scripts/secret-scan.sh
 ```
