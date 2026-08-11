@@ -40,15 +40,18 @@ If the script being moved currently owns the `// CHAIN-TAIL` marker (plus its 3-
 In the target file, add `const <NAME>_SCRIPT = "scripts/<name>.js";` near its other `*_SCRIPT` constants, and insert this block at the requested position:
 
 ```ts
+// Chain-launch the next script in the bootstrap before continuing.
 if (!ns.isRunning(<NAME>_SCRIPT, "home")) {
-	const pid = await runWithRetry(ns, <NAME>_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
-	if (pid === 0) {
+	const nextPid = await runWithRetry(ns, <NAME>_SCRIPT, LAUNCH_RETRY_ATTEMPTS, LAUNCH_RETRY_DELAY_MS);
+	if (nextPid === 0) {
 		ns.tprint(`<target-script-name>: failed to start ${<NAME>_SCRIPT} - check RAM/sync`);
 	}
 }
 ```
 
-Reuse the target file's existing `LAUNCH_RETRY_ATTEMPTS`/`LAUNCH_RETRY_DELAY_MS` constants if already declared; otherwise add them (`= 5` / `= 3000`, matching every other chain-launch site in this repo) alongside the new constant. Make sure `import { runWithRetry } from "../lib/launch";` is present in the target file — add it if missing.
+(this must stay byte-for-byte identical in shape to the `LAUNCH_BLOCK` that `new-background-loop`'s `scripts/scaffold-loop.sh` generates — including the leading comment and the `nextPid` variable name — since both skills produce the same kind of chain-launch site; if you change one, change the other.)
+
+Reuse the target file's existing `LAUNCH_RETRY_ATTEMPTS`/`LAUNCH_RETRY_DELAY_MS` constants if already declared; otherwise add them (`= 5` / `= 3000`, matching every other chain-launch site in this repo — same two numbers `scaffold-loop.sh` hardcodes for the same reason; keep both in sync if either ever changes) alongside the new constant. Make sure `import { runWithRetry } from "../lib/launch";` is present in the target file — add it if missing.
 
 ### 5. Verify the marker and the build
 

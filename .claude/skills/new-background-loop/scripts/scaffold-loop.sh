@@ -84,7 +84,9 @@ fi
 # 2. Insert the new *_SCRIPT constant, plus the shared retry constants if this
 #    file doesn't already have them (some tail scripts, e.g. rescan-loop.ts,
 #    already declare LAUNCH_RETRY_ATTEMPTS/LAUNCH_RETRY_DELAY_MS for their own
-#    use - reuse those instead of redeclaring).
+#    use - reuse those instead of redeclaring). The 5/3000 default below must
+#    stay in sync with the same two numbers hardcoded in the sibling skill
+#    reorder-chain-launch's SKILL.md (Step 4) - keep both in sync if either changes.
 CONST_BLOCK="const ${SCRIPT_CONST} = \"scripts/${NAME}.js\";"
 if ! grep -q '^const LAUNCH_RETRY_ATTEMPTS = ' "$TAIL_FILE"; then
 	CONST_BLOCK="${CONST_BLOCK}
@@ -112,7 +114,9 @@ sed -i "$((MAIN_LINE - 1))r $CONST_TMP" "$TAIL_FILE"
 rm -f "$CONST_TMP"
 
 # 3. Replace the CHAIN-TAIL marker with the actual chain-launch block, right
-#    before the (now-former) tail's while(true) loop.
+#    before the (now-former) tail's while(true) loop. This block's shape must
+#    stay in sync with the manually-inserted example in the sibling skill
+#    reorder-chain-launch's SKILL.md (Step 4) - keep both in sync if either changes.
 if ! grep -q '// CHAIN-TAIL' "$TAIL_FILE"; then
 	echo "ERROR: CHAIN-TAIL marker vanished from $TAIL_FILE after edits above - inspect by hand" >&2
 	exit 1
