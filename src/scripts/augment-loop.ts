@@ -124,6 +124,21 @@ export async function main(ns: NS): Promise<void> {
 			const nfg = canBuyNfg ? buyNeuroFlux(ns, factions, budget - real.spent) : { spent: 0, purchasedAny: false };
 			const purchasedAny = real.purchasedAny || nfg.purchasedAny;
 
+			// Diagnostic: candidates.length === 0 alone can't distinguish "nothing real left, ever"
+			// from "something exists but is still rep-gated" - count the latter too so the tail log
+			// can tell which case is driving an NFG-only tick.
+			let gatedCount = 0;
+			for (const faction of factions) {
+				const rep = ns.singularity.getFactionRep(faction);
+				for (const augName of ns.singularity.getAugmentationsFromFaction(faction)) {
+					if (augName === NEUROFLUX_NAME || owned.has(augName)) continue;
+					if (rep < ns.singularity.getAugmentationRepReq(augName)) gatedCount++;
+				}
+			}
+			ns.print(
+				`augment-loop: candidates=${candidates.length} gated=${gatedCount} queuedHasReal=${queuedHasReal} canBuyNfg=${canBuyNfg} budget=$${Math.round(budget).toLocaleString()}`,
+			);
+
 			// Nothing more purchasable this tick and something's queued - cash in the batch.
 			const queuedCount = ns.singularity.getOwnedAugmentations(true).length - ns.singularity.getOwnedAugmentations(false).length;
 			if (!purchasedAny && queuedCount > 0) {

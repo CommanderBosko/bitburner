@@ -15,14 +15,57 @@ const SINGULARITY_UNAVAILABLE_RETRY_MS = 300000;
 // hacking XP, 4x Security Work's, and the only one of the three whose reputation formula is
 // dominated by hacking skill rather than combat stats.
 const WORK_TYPE = "hacking";
-// Roadmap's named reachable early target (backdoor-loop.ts already grabs its qualifying
-// backdoor) - tried first if joined, not the only option; any other joined faction offering
-// hacking work is used once CyberSec isn't joined or workForFaction rejects it.
+// Tie-break only: used when two+ joined factions are equally (un)promising by augment-rep-gap
+// (including the common "nothing gated anywhere" case) - not a fixed default target anymore,
+// see orderFactionsByAugmentGap.
 const PREFERRED_FIRST_FACTION: FactionName = "CyberSec";
+const NEUROFLUX_NAME = "NeuroFlux Governor";
 
 let targetFaction: FactionName | null = null;
 
+// Ranks joined factions by how close they are to unlocking their next real (non-NFG, unowned)
+// augmentation - ascending reputation gap first, factions with nothing left to gain (Infinity)
+// last. Fixes the original bug: sticking with one faction forever meant every other joined
+// faction's augments stayed permanently rep-gated even while reputation could've been earned
+// for them instead (see augment-loop.ts's canBuyNfg diagnostic, which is what surfaced this -
+// gated=60 and unmoving for 30+ ticks because only one faction was ever being worked).
+function orderFactionsByAugmentGap(ns: NS, factions: FactionName[], owned: Set<string>): FactionName[] {
+	const gapByFaction = new Map<FactionName, number>();
+
+	for (const faction of factions) {
+		const rep = ns.singularity.getFactionRep(faction);
+		let minGap = Infinity;
+		for (const augName of ns.singularity.getAugmentationsFromFaction(faction)) {
+			if (augName === NEUROFLUX_NAME || owned.has(augName)) continue;
+			const gap = ns.singularity.getAugmentationRepReq(augName) - rep;
+			if (gap > 0 && gap < minGap) minGap = gap;
+		}
+		gapByFaction.set(faction, minGap);
+	}
+
+	return [...factions].sort((a, b) => {
+		// Explicit undefined checks instead of `??` - this project's ram-audit skill has a
+		// confirmed finding that the game's own static RAM analyzer sometimes attributes an
+		// unrelated ~10GB phantom charge to scripts using the nullish-coalescing operator.
+		// gapByFaction is populated for every entry in `factions` above, so these fallbacks are
+		// purely defensive and never actually hit.
+		const gaRaw = gapByFaction.get(a);
+		const gbRaw = gapByFaction.get(b);
+		const ga = gaRaw === undefined ? Infinity : gaRaw;
+		const gb = gbRaw === undefined ? Infinity : gbRaw;
+		// Guard equal-gap pairs (including the common Infinity/Infinity case, e.g. two factions
+		// with nothing gated) before subtracting - Infinity - Infinity is NaN, an invalid sort
+		// comparator result.
+		if (ga !== gb) return ga - gb;
+		return a === PREFERRED_FIRST_FACTION ? -1 : b === PREFERRED_FIRST_FACTION ? 1 : 0;
+	});
+}
+
 export async function main(ns: NS): Promise<void> {
+	// orderFactionsByAugmentGap now calls getFactionRep/getAugmentationsFromFaction/
+	// getAugmentationRepReq once per augment per joined faction, every tick - without this,
+	// auto-logged ns.* call lines flood the tail buffer and evict real diagnostics.
+	ns.disableLog("ALL");
 	ns.print("faction-work-loop: starting");
 
 	while (true) {
@@ -39,34 +82,31 @@ export async function main(ns: NS): Promise<void> {
 			// decideActiveWorkScript) - no cross-script deference needed here, just the
 			// pre-existing same-target dedup below.
 			const currentWork = ns.singularity.getCurrentWork();
+			const joined = ns.getPlayer().factions;
+			const owned = new Set(ns.singularity.getOwnedAugmentations(true));
 
-			if (targetFaction === null) {
-				const joined = ns.getPlayer().factions;
-				// Sort so PREFERRED_FIRST_FACTION (if joined) is tried first, without
-				// rebuilding the array from scratch - keeps every element's type as the
-				// real FactionName union instead of widening to string (see the type
-				// derivation above for why that distinction matters here).
-				const ordered = [...joined].sort((a, b) =>
-					a === PREFERRED_FIRST_FACTION ? -1 : b === PREFERRED_FIRST_FACTION ? 1 : 0,
-				);
-				for (const candidate of ordered) {
-					if (ns.singularity.workForFaction(candidate, WORK_TYPE, false)) {
-						targetFaction = candidate;
-						ns.print(`faction-work-loop: working for ${candidate}`);
-						break;
-					}
-				}
-			} else {
+			// Re-rank every tick instead of picking once and sticking forever - as reputation
+			// accrues from this loop's own work, the closest-gap faction changes, and this
+			// naturally rolls the loop on to the next one once the current target's gap closes to
+			// zero (i.e. its augmentation becomes buyable).
+			const ordered = orderFactionsByAugmentGap(ns, joined, owned);
+
+			let newTarget: FactionName | null = null;
+			for (const candidate of ordered) {
 				const alreadyWorkingHere =
-					currentWork !== null && currentWork.type === "FACTION" && currentWork.factionName === targetFaction;
-				if (!alreadyWorkingHere) {
-					const started = ns.singularity.workForFaction(targetFaction, WORK_TYPE, false);
-					if (!started) {
-						ns.print(`faction-work-loop: failed to resume work for ${targetFaction} - re-searching`);
-						targetFaction = null;
-					}
+					currentWork !== null && currentWork.type === "FACTION" && currentWork.factionName === candidate;
+				if (alreadyWorkingHere || ns.singularity.workForFaction(candidate, WORK_TYPE, false)) {
+					newTarget = candidate;
+					break;
 				}
 			}
+
+			if (newTarget !== targetFaction) {
+				const from = targetFaction === null ? "(none)" : targetFaction;
+				const to = newTarget === null ? "(none)" : newTarget;
+				ns.print(`faction-work-loop: switching target ${from} -> ${to}`);
+			}
+			targetFaction = newTarget;
 		} catch (error) {
 			ns.print(`faction-work-loop: singularity unavailable (${String(error)}) - backing off`);
 			singularityUnavailable = true;
