@@ -9,8 +9,9 @@ const TAIL_HEIGHT_MARGIN = 100;
 
 function statusTag(ns: NS, host: string): string {
 	const rooted = ns.hasRootAccess(host);
-	const required = ns.getServerRequiredHackingLevel(host);
-	return `${rooted ? "[ROOTED]" : "[locked]"} (req lvl ${required})`;
+	const backdoored = ns.getServer(host).backdoorInstalled ?? false;
+	const detail = backdoored ? "BACKDOORED" : `req lvl ${ns.getServerRequiredHackingLevel(host)}`;
+	return `${rooted ? "[ROOTED]" : "[locked]"} (${detail})`;
 }
 
 function renderChildren(ns: NS, host: string, visited: Set<string>, prefix: string, lines: string[]): void {
