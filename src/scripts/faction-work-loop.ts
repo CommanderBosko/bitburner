@@ -15,20 +15,25 @@ const SINGULARITY_UNAVAILABLE_RETRY_MS = 300000;
 // hacking XP, 4x Security Work's, and the only one of the three whose reputation formula is
 // dominated by hacking skill rather than combat stats.
 const WORK_TYPE = "hacking";
-// Tie-break only: used when two+ joined factions are equally (un)promising by augment-rep-gap
-// (including the common "nothing gated anywhere" case) - not a fixed default target anymore,
-// see orderFactionsByAugmentGap.
+// Tie-break only: used when two+ joined factions are equally promising by augment-rep-gap - not
+// a fixed default target anymore, see orderFactionsByAugmentGap.
 const PREFERRED_FIRST_FACTION: FactionName = "CyberSec";
 const NEUROFLUX_NAME = "NeuroFlux Governor";
 
 let targetFaction: FactionName | null = null;
 
-// Ranks joined factions by how close they are to unlocking their next real (non-NFG, unowned)
-// augmentation - ascending reputation gap first, factions with nothing left to gain (Infinity)
-// last. Fixes the original bug: sticking with one faction forever meant every other joined
-// faction's augments stayed permanently rep-gated even while reputation could've been earned
-// for them instead (see augment-loop.ts's canBuyNfg diagnostic, which is what surfaced this -
-// gated=60 and unmoving for 30+ ticks because only one faction was ever being worked).
+// Ranks joined factions by how close they are to unlocking their next real augmentation -
+// ascending reputation gap first. Factions with nothing left to grind rep for (every augment
+// either owned or already at sufficient rep, NeuroFlux Governor included) are dropped entirely
+// rather than ranked with an Infinity gap: working one of them still earns reputation, but with
+// no purchasable payoff, and previously that meant it stayed the target forever (see main()'s
+// stopAction call, the other half of this fix - 2026-08-13, user-directed: "only one faction
+// unlocked, no augments to obtain from it, time would be better spent earning money" - without
+// this, company-work-loop.js's money-earning never got a turn). Also fixes the original bug:
+// sticking with one faction forever meant every other joined faction's augments stayed
+// permanently rep-gated even while reputation could've been earned for them instead (see
+// augment-loop.ts's canBuyNfg diagnostic, which is what surfaced this - gated=60 and unmoving
+// for 30+ ticks because only one faction was ever being worked).
 function orderFactionsByAugmentGap(ns: NS, factions: FactionName[], owned: Set<string>): FactionName[] {
 	const gapByFaction = new Map<FactionName, number>();
 
@@ -36,29 +41,35 @@ function orderFactionsByAugmentGap(ns: NS, factions: FactionName[], owned: Set<s
 		const rep = ns.singularity.getFactionRep(faction);
 		let minGap = Infinity;
 		for (const augName of ns.singularity.getAugmentationsFromFaction(faction)) {
-			if (augName === NEUROFLUX_NAME || owned.has(augName)) continue;
+			// NeuroFlux Governor is repeatable - getOwnedAugmentations lists it once regardless of
+			// how many levels have already been bought, so (unlike a real augmentation) it's never
+			// skipped via the owned check here: the rep gap toward its *next* purchase is still
+			// worth grinding for even after buying prior levels.
+			if (augName !== NEUROFLUX_NAME && owned.has(augName)) continue;
 			const gap = ns.singularity.getAugmentationRepReq(augName) - rep;
 			if (gap > 0 && gap < minGap) minGap = gap;
 		}
 		gapByFaction.set(faction, minGap);
 	}
 
-	return [...factions].sort((a, b) => {
-		// Explicit undefined checks instead of `??` - this project's ram-audit skill has a
-		// confirmed finding that the game's own static RAM analyzer sometimes attributes an
-		// unrelated ~10GB phantom charge to scripts using the nullish-coalescing operator.
-		// gapByFaction is populated for every entry in `factions` above, so these fallbacks are
-		// purely defensive and never actually hit.
-		const gaRaw = gapByFaction.get(a);
-		const gbRaw = gapByFaction.get(b);
-		const ga = gaRaw === undefined ? Infinity : gaRaw;
-		const gb = gbRaw === undefined ? Infinity : gbRaw;
-		// Guard equal-gap pairs (including the common Infinity/Infinity case, e.g. two factions
-		// with nothing gated) before subtracting - Infinity - Infinity is NaN, an invalid sort
-		// comparator result.
-		if (ga !== gb) return ga - gb;
-		return a === PREFERRED_FIRST_FACTION ? -1 : b === PREFERRED_FIRST_FACTION ? 1 : 0;
-	});
+	return factions
+		.filter((f) => {
+			const gap = gapByFaction.get(f);
+			return gap !== undefined && gap < Infinity;
+		})
+		.sort((a, b) => {
+			// Explicit undefined checks instead of `??` - this project's ram-audit skill has a
+			// confirmed finding that the game's own static RAM analyzer sometimes attributes an
+			// unrelated ~10GB phantom charge to scripts using the nullish-coalescing operator.
+			// Both a and b already passed the finite-gap filter above, so these fallbacks are
+			// purely defensive and never actually hit.
+			const gaRaw = gapByFaction.get(a);
+			const gbRaw = gapByFaction.get(b);
+			const ga = gaRaw === undefined ? Infinity : gaRaw;
+			const gb = gbRaw === undefined ? Infinity : gbRaw;
+			if (ga !== gb) return ga - gb;
+			return a === PREFERRED_FIRST_FACTION ? -1 : b === PREFERRED_FIRST_FACTION ? 1 : 0;
+		});
 }
 
 export async function main(ns: NS): Promise<void> {
@@ -99,6 +110,19 @@ export async function main(ns: NS): Promise<void> {
 					newTarget = candidate;
 					break;
 				}
+			}
+
+			// Nothing worth targeting this tick (ordered came back empty because every joined
+			// faction's minGap is Infinity, or every workForFaction attempt above failed) but a
+			// previous tick's faction work may still be running - the game keeps an action going
+			// until something explicitly stops or replaces it, it doesn't expire on its own just
+			// because this loop stopped renewing it. Release it so ns.singularity.getCurrentWork()
+			// stops reporting type "FACTION", which is the signal controller.ts's
+			// decideActiveWorkScript already polls for (its existing FACTION_GRACE_MS fallback) to
+			// hand the work slot to company-work-loop.js (money) instead - without this, a faction
+			// with nothing left to buy would grind reputation forever with no purchasable payoff.
+			if (newTarget === null && currentWork !== null && currentWork.type === "FACTION") {
+				ns.singularity.stopAction();
 			}
 
 			if (newTarget !== targetFaction) {
