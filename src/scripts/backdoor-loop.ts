@@ -3,31 +3,53 @@ import type { ServerReport } from "../lib/types";
 import { buildParentMap, pathTo } from "../lib/network";
 
 const BACKDOOR_LOOP_INTERVAL_MS = 60000;
-// Matches SERVER_NAME_PREFIX in server-purchase-manager.ts - purchased servers are named
-// pserv-<timestamp>. Private/purchased servers (plus home) can't be backdoored (installBackdoor
-// throws "Cannot backdoor <host> because it is your server" - confirmed live 2026-08-09), so skip
-// them by hostname up front instead of fetching ns.getServer() on each one every cycle.
-const PSERV_PREFIX = "pserv-";
+// Only backdoor servers whose backdoor actually unlocks something (researched 2026-08-13 against
+// bitburner-official/bitburner-src docs + community automation projects, cross-checked across
+// sources). Backdooring every rooted host wastes loop cycles connecting through dozens of servers
+// (n00dles, foodnstuff, etc.) where a backdoor is a pure no-op. This also makes the old
+// isPrivateServer/PSERV_PREFIX skip (home and pserv-* can't be backdoored - installBackdoor throws
+// "Cannot backdoor <host> because it is your server", confirmed live 2026-08-09) redundant: neither
+// ever appears in this allowlist, so there's nothing left to filter out.
+const TARGET_HOSTS = new Set<string>([
+	// Hacking-group factions - backdoor is a hard requirement for the invite.
+	"CSEC", // CyberSec
+	"avmnite-02h", // NiteSec
+	"I.I.I.I", // The Black Hand
+	"run4theh111z", // BitRunners
+	"fulcrumassets", // Fulcrum Secret Technologies (alongside 400k rep)
+	// Endgame gate: backdooring The-Cave (itself gated behind the Red Pill aug + 925 hacking) is
+	// required to reach w0r1d_d43m0n. w0r1d_d43m0n is deliberately NOT in this list - it's destroyed
+	// via ns.hack(), not installBackdoor().
+	"The-Cave",
+	// Megacorp servers - backdoor is optional but cuts that company faction's required reputation
+	// 400k -> 300k (25%), confirmed in bitburner-official docs.
+	"ecorp", // ECorp
+	"megacorp", // MegaCorp
+	"b-and-a", // Bachman & Associates
+	"blade", // Blade Industries
+	"nwo", // NWO
+	"clarkinc", // Clarke Incorporated
+	"omnitek", // OmniTek Incorporated
+	"4sigma", // Four Sigma
+	"kuai-gong", // KuaiGong International
+]);
 // This repo hardcodes a BN4 context for this script (see controller.ts's launch comment). The
 // 2026-07-31 finding that upgradeHomeRam could error demanding SF4 even inside BN4 (see
 // bitburner_singularity_locked memory) does NOT reproduce here - confirmed live 2026-08-09, all
 // 5 BN4_SINGULARITY_SCRIPTS ran cleanly inside BN4, including this one's installBackdoor/connect
 // calls. The try/catch is kept anyway as cheap general insurance (it correctly caught a real,
-// unrelated bug the same session - see getRootedHosts' isPrivateServer filter). Back off far
-// longer than the normal loop interval so a recurring failure doesn't spam retries.
+// unrelated own-server bug the same session - see commit 31aa512, since superseded by the
+// TARGET_HOSTS allowlist above). Back off far longer than the normal loop interval so a
+// recurring failure doesn't spam retries.
 const SINGULARITY_UNAVAILABLE_RETRY_MS = 300000;
 
-function isPrivateServer(host: string): boolean {
-	return host === "home" || host.startsWith(PSERV_PREFIX);
-}
-
-function getRootedHosts(ns: NS): string[] {
+function getTargetRootedHosts(ns: NS): string[] {
 	if (!ns.fileExists("/data/servers.json", "home")) return [];
 	const raw = ns.read("/data/servers.json");
 	if (!raw) return [];
 
 	const reports = JSON.parse(raw) as ServerReport[];
-	return reports.filter((r) => r.rooted && !isPrivateServer(r.hostname)).map((r) => r.hostname);
+	return reports.filter((r) => r.rooted && TARGET_HOSTS.has(r.hostname)).map((r) => r.hostname);
 }
 
 async function installBackdoorOn(ns: NS, host: string, parents: Map<string, string>): Promise<void> {
@@ -57,7 +79,7 @@ export async function main(ns: NS): Promise<void> {
 	ns.print("backdoor-loop: starting");
 
 	while (true) {
-		const hosts = getRootedHosts(ns);
+		const hosts = getTargetRootedHosts(ns);
 		const parents = buildParentMap(ns);
 		let singularityUnavailable = false;
 
