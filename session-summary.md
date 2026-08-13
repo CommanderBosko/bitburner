@@ -1,3 +1,33 @@
+## Session: 2026-08-12/13 — NFG-gate bug's 3rd root cause, backdoor-loop allowlist, faction work-slot release, augment-loop donations, two new skills
+
+**Focus**: A cluster of user-reported/requested fixes to the augment-loop/faction-work-loop bug family plus two new automation features, closed out by formalizing the recurring diagnosis pattern into a skill.
+
+### What changed (and why)
+- **`server-tree.ts`** (`80822f4`): shows `BACKDOORED` instead of req lvl once a host is backdoored — small user-requested display fix.
+- **`augment-loop.ts`** NFG-gate 3rd fix (`c029546`): user reported NFG-only installs recurring (level 30→47 since the 08-11 fix). `candidates.length === 0` was true both for "nothing real left" and for "a real augmentation exists but is still rep-gated" — `canBuyNfg` now also requires `gatedCount === 0`. Confirms the 08-11 rotation fix itself was working; this was an independent gap on the rep axis instead of the money axis.
+- **`backdoor-loop.ts`** (`ef74360`): now only backdoors a hardcoded 15-server allowlist (5 faction-invite servers + `The-Cave` + 9 megacorp servers) instead of every rooted host, researched and cross-checked against 3 independent sources via `/research`. Removed the now-redundant `isPrivateServer` skip logic.
+- **`faction-work-loop.ts`** (`bdec741`): user reported the loop grinding rep for a faction with nothing left to buy right after an install. `orderFactionsByAugmentGap` now drops `Infinity`-gap factions instead of still ranking them, and `main()` calls `ns.singularity.stopAction()` to release the work slot so `controller.ts`'s existing fallback can hand it to `company-work-loop.js`.
+- **`augment-loop.ts`** donations (`c308cad`): now donates spare money to close the smallest rep gap blocking a purchasable augmentation each tick, via `donateToFaction`. Caught and fixed an install-ordering bug along the way — a donation that closes a rep gate doesn't get spent until the next tick, so a donate-only tick needed to also block that tick's install.
+- **New skill `ram-costs-refresh`**: re-derives `ram-costs.json` from upstream `RamCostGenerator.ts`. Smoke-tested for real — zero drift on every existing entry, 19 real `singularity.*` gaps found and closed (several needed by the fixes above), a bug in the skill's own wording (would've proposed adding excluded `corporation.*`/`dnet.*` entries) caught and fixed mid-run.
+- **New skill `diagnose-loop-bug`**: formalizes the recurring cycle behind 6 fixes across this cluster and the 08-11 session — grep the decision function, read it fully, check every dimension the gate should cover, patch, build-check, verify in-game, record a memory note.
+
+### Decisions
+- Donation logic lives in `augment-loop.ts` (already money-aware), not `faction-work-loop.ts` — donates closest-gap-first, drops the BitNode-multiplier term (imprecision costs a tick, never a wrong outcome), uses `donateToFaction`'s own return as the favor-threshold check.
+- `backdoor-loop.ts`'s target list is a hardcoded allowlist, not dynamically derived — the qualifying set is small and fixed by game design.
+- `diagnose-loop-bug` built as its own project-local skill rather than folded into an existing one — 6 fixes with the identical shape (gate missing a dimension) cleared the reuse bar.
+- `ram-costs-refresh` scoped as Data Enrichment, unpinned model, no `scripts/` — parsing the generator's nested-object-plus-tier shape was judged too irregular to safely script with regex.
+
+### Issues / surprises
+- **None of the 4 game-code fixes from this session have been watched through a real in-game tick yet** — all compile clean and are synced, but confirmation is next session's top priority.
+- `scan-session.sh transcript` silently stopped after 2 of 12 transcripts on this close (likely a Bash-tool output-size limit on one large combined command) — the other 10, including everything covering today's fixes, had to be re-scanned by hand via targeted `jq`/`grep`. Flagged in `project-state.md`'s Known Issues in case it recurs.
+
+### Next session
+- Watch the 4 unverified fixes through a real tick (see `project-state.md` Known Issues for exact signals per fix).
+- Continue watching the karma grind and `gang-manager.js`'s split architecture, carried over unchanged.
+
+**Commits**: `80822f4..7820769` (7 commits)
+
+---
 ## Session: 2026-08-11 — Augment purchaser's NFG-only bug traced past a first fix to faction-work-loop.ts's root cause; ram-audit caught 2 real bugs before push
 
 **Focus**: User reported the augment purchaser kept installing NeuroFlux Governor-only batches. A first, plausible fix (budget-sequencing) didn't resolve it; live diagnostics traced the real cause to a different script entirely and produced a bigger, correct fix.
@@ -105,31 +135,6 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - See `project-state.md` for full current-state detail.
 
 **Commits**: `c54ca5c`..`c4b4ea7` (6 commits, made earlier today before this session; this session's own changes are uncommitted — see Decisions above)
-
----
-
-## Session: 2026-08-08 — No code changes: SF4-gated program-buying question answered, dev watchers restarted
-
-**Focus**: Planning/review only — no commits this close. Spans two brief sessions since the 08-06 close plus this close-out itself.
-
-### What changed (and why)
-- Nothing in the codebase — `git status` clean, no commits since `df9851d` (08-06's close). This is an informational/housekeeping gap, not a code session.
-- 2026-08-07: answered whether a script could buy dark-web programs (`FTPCrack.exe`/`SQLInject.exe`/etc.) without SF4 — confirmed hard no, `ns.singularity.purchaseProgram()` is fully inside the SF4-gated `Singularity` interface and this save has never earned SF4. Offered to pre-build the script for later use; not actioned.
-- 2026-08-08: restarted `npm run watch`/`npm run sync` as detached background processes via the `dev-watch` skill (PIDs 81745/81770, confirmed alive at close) — routine dev-loop housekeeping.
-
-### Decisions
-- Left the pre-build-the-script offer open rather than assuming yes/no — it's optional, non-blocking, and the user didn't respond before the session ended.
-- Updated `[[bitburner_singularity_locked]]` memory to flag that its "lock lifted inside BN4" update is now stale (save left BN4 back in early August) rather than leaving a misleading claim for a future session to trip over.
-
-### Issues / surprises
-- None — this was a quiet, no-risk gap between real work sessions.
-
-### Next session
-- Play BN5 normally, per `[[bitburner_bn5_intelligence]]` — no dedicated script work planned.
-- Still watching for a cold-restart confirmation of both the gang-manager priority fix (08-04) and the scan-root reserve fix (08-06) — neither has been re-verified after a full `killall` yet.
-- If the SF4-gated program-buyer question comes up again: decide whether to pre-build it now or wait for SF4.
-
-**Commits**: none (working tree clean since `df9851d`)
 
 ---
 
