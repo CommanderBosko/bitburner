@@ -113,20 +113,13 @@ export async function main(ns: NS): Promise<void> {
 			const budget = ns.getPlayer().money * (1 - RESERVE_FRACTION);
 
 			const candidates = collectCandidates(ns, factions, owned);
-			const real = buyCandidates(ns, candidates, budget);
 
-			// Only spend on NeuroFlux once a real augmentation is already queued (this tick's
-			// purchase above, or an earlier tick's) or there's nothing real left to save toward
-			// (candidates empty) - otherwise NFG's cheap, always-affordable price drains the budget
-			// every tick before it can ever reach a pricier real augment, and installs end up
-			// NFG-only (the bug this guards against).
-			const canBuyNfg = real.purchasedAny || queuedHasReal || candidates.length === 0;
-			const nfg = canBuyNfg ? buyNeuroFlux(ns, factions, budget - real.spent) : { spent: 0, purchasedAny: false };
-			const purchasedAny = real.purchasedAny || nfg.purchasedAny;
-
-			// Diagnostic: candidates.length === 0 alone can't distinguish "nothing real left, ever"
-			// from "something exists but is still rep-gated" - count the latter too so the tail log
-			// can tell which case is driving an NFG-only tick.
+			// A rep-gated real augmentation is NOT in candidates (collectCandidates filters it out)
+			// but still counts as "something to save toward" - without this, canBuyNfg below would
+			// see candidates.length === 0 and mistake "not rep-unlocked yet" for "nothing real left,
+			// ever", draining the budget into NeuroFlux while rep is still catching up (this is the
+			// second half of the NFG-only-install bug c09d707 only partly fixed: that fix closed the
+			// money-starvation path but left this rep-starvation path open).
 			let gatedCount = 0;
 			for (const faction of factions) {
 				const rep = ns.singularity.getFactionRep(faction);
@@ -135,6 +128,18 @@ export async function main(ns: NS): Promise<void> {
 					if (rep < ns.singularity.getAugmentationRepReq(augName)) gatedCount++;
 				}
 			}
+
+			const real = buyCandidates(ns, candidates, budget);
+
+			// Only spend on NeuroFlux once a real augmentation is already queued (this tick's
+			// purchase above, or an earlier tick's) or there's nothing real left to save toward at
+			// all - no candidates AND nothing rep-gated either - otherwise NFG's cheap,
+			// always-affordable price drains the budget every tick before it can ever reach a
+			// pricier real augment, and installs end up NFG-only (the bug this guards against).
+			const canBuyNfg = real.purchasedAny || queuedHasReal || (candidates.length === 0 && gatedCount === 0);
+			const nfg = canBuyNfg ? buyNeuroFlux(ns, factions, budget - real.spent) : { spent: 0, purchasedAny: false };
+			const purchasedAny = real.purchasedAny || nfg.purchasedAny;
+
 			ns.print(
 				`augment-loop: candidates=${candidates.length} gated=${gatedCount} queuedHasReal=${queuedHasReal} canBuyNfg=${canBuyNfg} budget=$${Math.round(budget).toLocaleString()}`,
 			);
