@@ -1,3 +1,28 @@
+## Session: 2026-08-15 — Territory Warfare power growth researched + implemented, NFG-gate 4th fix confirmed live, post-restart crime fallback fixed
+
+**Focus**: Research and implement gang power growth via territory warfare, then diagnose and fix two more live-reported bugs using the `diagnose-loop-bug` pattern.
+
+### What changed (and why)
+- **`gang-manager.ts`** (`5252847`): researched territory warfare mechanics via `/research` (10 agents against the game's own TypeScript source) — power only grows from members on the "Territory Warfare" task, risk-free while clash engagement stays off. The existing 65%/55% engage/disengage hysteresis was dead code because nothing ever assigned that task. `computeTaskAssignments` now dedicates trained members to it once respect is capped.
+- **`augment-loop.ts`** (`1855448`): 4th fix on the NFG gate — gang-locked augmentations (can't be donated to or worked for) were still incrementing `gatedCount` even though excluded from `donateTarget`, permanently blocking NFG purchases. Moved the exclusion earlier. **Confirmed live**: the full faction→company→faction hand-off chain worked end-to-end.
+- **`controller.ts`/`crime-loop.ts`** (`a7bc3e4`): fixed a post-restart idle bug — crime could never be selected once a gang exists, and `crime-loop.ts`'s self-stop guard would've killed it anyway. Added a 3-minute post-restart grace window; removed the guard. **Confirmed live.**
+
+### Decisions
+- Territory Warfare thresholds left at the existing 65%/55% — already within the researched-safe 60-65% win-chance range.
+- `crime-loop.ts`'s self-stop guard removed entirely rather than reordered — `controller.ts` is now the sole authority over all three work-loop scripts, matching its siblings.
+- Post-restart crime fallback keyed off `CONTROLLER_STARTED_AT` (set fresh on every controller process start) rather than a stat-recovery threshold — simpler and free.
+
+### Issues / surprises
+- A screenshot showing the character working ECorp instead of grinding Daedalus rep looked like a new bug but turned out to be the crime/company/faction hand-off chain working exactly as designed — worth double-checking against intended behavior before assuming a regression.
+- Territory Warfare (`5252847`) is the one change from this session **not yet observed live** — needs a real tick to confirm task assignment and win-chance climb.
+
+### Next session
+- Watch `gang-manager.js` tail for `-> Territory Warfare` assignments and climbing win chance.
+- Still unverified from 2026-08-12/13: backdoor-loop allowlist (`ef74360`), augment-loop donations (`c308cad`).
+
+**Commits**: `1855448..5252847` (3 commits)
+
+---
 ## Session: 2026-08-12/13 — NFG-gate bug's 3rd root cause, backdoor-loop allowlist, faction work-slot release, augment-loop donations, two new skills
 
 **Focus**: A cluster of user-reported/requested fixes to the augment-loop/faction-work-loop bug family plus two new automation features, closed out by formalizing the recurring diagnosis pattern into a skill.
@@ -106,35 +131,6 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - See `project-state.md` for full current-state detail.
 
 **Commits**: `4731579` (1 commit)
-
----
-
-## Session: 2026-08-09 — BN5→BN4 pivot caught up in docs; new karma/gang/augment automation; RAM-driven work-loop redesign
-
-**Focus**: Backfill an undocumented BN5→BN4 pivot + Singularity revival from earlier today, then build the requested karma-grind-to-gang automation and augmentation automation — which live testing immediately turned into a RAM-exclusivity redesign of the whole Singularity work-loop group.
-
-### What changed (and why)
-- **Docs catch-up**: `project-state.md`/`session-summary.md` hadn't been updated since 08-08, so they still said BN5 was current — an earlier unclosed session today had already cleared BN5 for real and pivoted to BN4, reviving `home-ram-loop.ts`/`home-cores-loop.ts`/`company-work-loop.ts`/`backdoor-loop.ts` + a new `faction-work-loop.ts`/`program-buy-loop.ts` (commits `c54ca5c`..`c4b4ea7`, already committed before this session started). `[[bitburner_singularity_locked]]`/`[[bitburner_bn4_singularity]]` memory already reflected this; the repo docs didn't, until now.
-- Built `crime-loop.ts` (Mug→Homicide karma grind, stops once gang exists) and `augment-loop.ts` (gated on gang existing; buys augmentations priciest-first, installs with a `cbScript` that re-triggers the whole chain-launch bootstrap) per a scoped `/interview`.
-- **Found via live `mem`+`ps`, not assumed**: the first version left all three of crime/faction/company-work-loop resident simultaneously with internal deference checks — this starved `crime-loop.js` of RAM entirely (company+faction alone left only ~6GB free). Redesigned so only one is ever resident, decided by a new `decideActiveWorkScript` in `controller.ts` (kills whichever isn't wanted, launches the one that is) — cheaper than merging them into one file, since Bitburner charges RAM once per function *referenced*, not per call.
-- **Found via user report**: `commitCrime(crime, true)` was yanking the game UI to the Work screen on every ~3s recommit. Fixed with `focus: false`, matching the convention the other two work-loop scripts already used.
-
-### Decisions
-- RAM-exclusivity (only one of crime/faction/company resident) implemented inside `controller.ts` rather than a separate coordinator script or a merged single script — see `project-state.md`'s Recent Decisions for the full RAM-cost reasoning.
-- `augment-loop.js`'s launch itself (not just its internal logic) is gated on `ns.gang.inGang()` at the `controller.ts` level, so its 28.10GB isn't paid during the whole pre-gang crime grind.
-- Not committing/pushing this session's code changes yet — user paused `session-closer` mid-run ("not ready to close out yet"), so this doc/memory update was done standalone at their request, working tree left as-is for them to commit when ready.
-
-### Issues / surprises
-- The first work-loop design (three scripts + internal deference) looked correct on paper (build passed, `activate-check` passed) but failed in practice purely on RAM math — a good example of why this repo's `[[feedback_verify_ingame_before_declaring_fixed]]` rule exists; compiling and passing static wiring checks isn't the same as confirming live resource contention.
-- `gang-manager.js` (36.10GB) still isn't launching on this BN4 save either, observed but not investigated this session — likely the same RAM-squeeze bug class as `[[bitburner_corp_hacknet_ram_squeeze]]`, just recurring in a new context (backdoor-loop.js + the work-loop group are the new competitors this time, not hacknet/darknet).
-
-### Next session
-- Watch the karma grind reach gang creation; confirm the post-gang handoff (crime killed, augment-loop launched, faction preferred over company) happens as designed — not observed live yet, karma grind takes real playtime.
-- Investigate why `gang-manager.js` isn't launching.
-- Decide whether/when to commit this session's uncommitted changes (`crime-loop.ts`/`augment-loop.ts`/`controller.ts`/`faction-work-loop.ts`).
-- See `project-state.md` for full current-state detail.
-
-**Commits**: `c54ca5c`..`c4b4ea7` (6 commits, made earlier today before this session; this session's own changes are uncommitted — see Decisions above)
 
 ---
 
