@@ -148,9 +148,19 @@ export async function main(ns: NS): Promise<void> {
 
 			const candidates = collectCandidates(ns, factions, owned);
 
-			// Can't donate to your own gang's faction (game restriction, see buyDonation) - excluded
-			// below so it's never picked as the donation target, even though it still counts toward
-			// gatedCount.
+			// Can't donate to your own gang's faction (game restriction, see buyDonation), and
+			// can't work for it either - gang factions offer none of the FactionWorkType work
+			// types (their page is Territory/Augmentations only), so workForFaction always fails
+			// for it too. Excluded up front, before gatedCount, not just from donateTarget - a
+			// gang aug's rep gate is not something this automation can ever close (gang rep only
+			// grows via gang activity), so it must not count toward "is there still a real
+			// augmentation this automation could make progress on" either. Previously the gang
+			// exclusion only guarded donateTarget selection while still incrementing gatedCount,
+			// so any rep-gated gang augmentation permanently held canBuyNfg false below - stranding
+			// every tick of rep faction-work-loop.ts earns toward NeuroFlux Governor at whichever
+			// non-gang faction has the closest gap, since it could never actually get spent while
+			// gatedCount stayed stuck above 0 (2026-08-15 fix, reported live: character grinding
+			// Sector-12 rep for NFG despite Sector-12 showing "No Augmentations left").
 			const gangFaction = ns.gang.getGangInformation().faction;
 
 			// A rep-gated real augmentation is NOT in candidates (collectCandidates filters it out)
@@ -170,8 +180,8 @@ export async function main(ns: NS): Promise<void> {
 					if (augName === NEUROFLUX_NAME || owned.has(augName)) continue;
 					const gap = ns.singularity.getAugmentationRepReq(augName) - rep;
 					if (gap <= 0) continue;
-					gatedCount++;
 					if (faction === gangFaction) continue;
+					gatedCount++;
 					if (donateTarget === null || gap < donateTarget.gap) donateTarget = { faction, name: augName, gap };
 				}
 			}
