@@ -81,6 +81,10 @@ const LOWER_TIER_BN4_SINGULARITY_SCRIPTS = [HOME_CORES_LOOP_SCRIPT, PROGRAM_BUY_
 // the launch block in main() (currentReserveGb's own call site only reads these, never writes).
 let activeWorkScript: string | null = null;
 let lastWorkTransitionAt = 0;
+// Evaluated once when controller.js's process starts - the chain-launch bootstrap re-enters this
+// script fresh on every reboot, including the one installAugmentations' cbScript triggers, so this
+// timestamp doubles as "time since the last fresh restart" with no extra signal needed.
+const CONTROLLER_STARTED_AT = Date.now();
 // How long company-work-loop.js runs before faction-work-loop.js gets another shot at finding
 // eligible faction work (a newly joined/eligible faction can only be detected by trying it -
 // there's no cheap ns.* check for "is any joined faction currently accepting hacking work").
@@ -89,9 +93,15 @@ const FACTION_PROBE_INTERVAL_MS = 300000;
 // finding work and falling back to company - long enough for a couple of its own 30s ticks to
 // join a faction and start work.
 const FACTION_GRACE_MS = 90000;
+// User-directed 2026-08-15: run crime-loop.js briefly on every fresh restart, even with a gang -
+// installAugmentations resets hacking/combat stats to 1, and a short crime grind right after that
+// is worth doing before handing off to faction/company work, not something to retire permanently
+// the moment a gang exists. Deliberately short ("a brief part of each install," not a return to
+// pre-gang karma-grinding) - sits between FACTION_GRACE_MS and FACTION_PROBE_INTERVAL_MS.
+const POST_RESTART_CRIME_GRACE_MS = 180000;
 
 function decideActiveWorkScript(ns: NS): string {
-	if (!ns.gang.inGang()) return CRIME_LOOP_SCRIPT;
+	if (!ns.gang.inGang() || Date.now() - CONTROLLER_STARTED_AT < POST_RESTART_CRIME_GRACE_MS) return CRIME_LOOP_SCRIPT;
 
 	const now = Date.now();
 	if (activeWorkScript === COMPANY_WORK_LOOP_SCRIPT) {

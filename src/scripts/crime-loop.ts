@@ -15,14 +15,14 @@ export async function main(ns: NS): Promise<void> {
 	ns.print("crime-loop: starting");
 
 	while (true) {
-		if (ns.gang.inGang()) {
-			// Karma-grinding is permanently done - controller.ts's coordinator kills this script
-			// once it sees the gang exists (freeing its RAM for good, not just idling it), but
-			// self-stop here too as a defensive backup in case that kill is ever delayed/missed.
-			ns.print("crime-loop: gang exists - stopping");
-			return;
-		}
-
+		// No self-stop-on-gang guard here (unlike an earlier version of this script) -
+		// controller.ts's decideActiveWorkScript is the single source of truth for the work-loop
+		// exclusivity group (crime/faction/company), same as its faction-work-loop.ts/
+		// company-work-loop.ts siblings, neither of which self-stop either. It now deliberately
+		// re-selects this script briefly on every fresh restart even with a gang (user-directed
+		// 2026-08-15: a brief crime grind is worth doing right after installAugmentations resets
+		// stats to 1) - a self-stop here would fight that and kill this script the instant it's
+		// launched, before it got to do anything.
 		try {
 			const crime = ns.singularity.getCrimeChance("Homicide") >= HOMICIDE_CHANCE_THRESHOLD ? "Homicide" : "Mug";
 			// focus=false, same convention as faction-work-loop.ts/company-work-loop.ts (and NOT
