@@ -43,6 +43,14 @@ const WARFARE_ENGAGE_WIN_CHANCE = 0.65;
 // Hysteresis: only disengage once win chance drops meaningfully below the engage threshold,
 // so a single noisy reading doesn't flip territory warfare on/off every tick.
 const WARFARE_DISENGAGE_WIN_CHANCE = 0.55;
+// 60-65% win chance is a researched-and-verified-safe engage threshold (not just "good enough"):
+// per the game's own source (AllGangs.ts's getClashWinChance = ownPower / (ownPower +
+// rivalPower)) plus community consensus, a losing gang's power drops too, so even a modest
+// initial edge snowballs into a growing advantage over repeated clashes - no need to wait for a
+// much larger (e.g. 90%+) margin before it's worth engaging.
+const TERRITORY_WARFARE_TASK_NAME = "Territory Warfare";
+// Own territory share (0-1) above which there's nothing meaningful left to fight for.
+const TERRITORY_FULL_FRACTION = 1;
 const RESERVE_FRACTION = 0.1;
 // Gang respect converts to the founding faction's reputation at a fixed 75:1 ratio (game source:
 // GangConstants.GangRespectToReputationRatio) - see the original gang-manager.ts history for why
@@ -139,11 +147,25 @@ interface TaskAssignment {
 function computeTaskAssignments(report: GangStateReport): TaskAssignment[] {
 	const wantRespect = report.respect < EARN_MONEY_RESPECT_THRESHOLD && report.respect < report.respectForNextRecruitThreshold;
 
+	// Once respect is no longer the priority, dedicate trained members to growing gang power
+	// instead of jumping straight to earning money. Researched (game source + community): only
+	// members actually assigned to the "Territory Warfare" task contribute to the gang's
+	// aggregate power (it earns $0/0 respect - see tasks.ts - its sole purpose is the power
+	// contribution described in its own in-game tooltip), and this is risk-free as long as
+	// ns.gang.setTerritoryWarfare() engagement stays off - member death only happens during an
+	// actual clash, gated separately by computeWarfareDecision/gang-agent-warfare.ts below. Stops
+	// once there's no territory left worth fighting for.
+	const wantPowerGrowth = !wantRespect && report.rivals.length > 0 && report.territory < TERRITORY_FULL_FRACTION;
+	const territoryWarfareTaskName = wantPowerGrowth
+		? report.tasks.find((t) => t.name === TERRITORY_WARFARE_TASK_NAME)?.name
+		: undefined;
+
 	const assignments: TaskAssignment[] = [];
 	for (const member of report.members) {
 		const stillTraining = member.primaryAscMult < EARN_ASC_MULT_TARGET;
 		const target =
 			(stillTraining && pickTrainTask(report.tasks, report.isHacking)) ||
+			territoryWarfareTaskName ||
 			pickEarnTask(member, report.tasks, report.isHacking, wantRespect, report.territory);
 		if (target && member.task !== target) {
 			assignments.push({ memberName: member.name, taskName: target });
