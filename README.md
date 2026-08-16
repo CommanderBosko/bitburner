@@ -57,12 +57,10 @@ The save is currently in **BitNode 4 (Singularity)**, so `controller` also runs 
 
 ## Recent Changes
 
+- **BN4 was cleared for real (SF4.1 obtained), and the save is now mid-replay in BN4.2** — 2 more clears targeted for SF4.3 (native RAM cost for `ns.singularity.*` outside BN4), per the researched BitNode order. No code changes; the existing automation carried the character through the first clear end-to-end. Along the way, `crime-loop.ts`'s post-restart RAM-race fallback was re-confirmed against a genuine fresh BitNode entry (home RAM resets to 32GB, unlike an augment-install reset which leaves it intact) — self-resolving as designed.
 - **`gang-manager.ts` now grows gang power via the "Territory Warfare" task** once respect is capped, researched from the game's own TypeScript source — power only accrues from members assigned that task, and it's risk-free as long as clash engagement stays off. The existing 65%/55% engage/disengage hysteresis had been dead code until now, since nothing ever assigned it.
 - **The augment purchaser's "NeuroFlux Governor only" bug got a 4th fix, confirmed live** — gang-locked augmentations were still counted as "something real left to wait for" even though they can never actually be donated to or worked for. Combined with the earlier fixes (faction-reputation rotation, then a rep-gating gap), this closes the loop on the bug family for now.
 - **Crime now runs briefly after a fresh restart even with a gang already active** — previously it could never be selected again once a gang existed, and a leftover self-stop guard would have killed it immediately anyway. Confirmed live: crime runs for a few minutes post-restart before handing off to faction/company work as usual.
-- **`backdoor-loop.ts` now only backdoors a hardcoded 15-server allowlist** (5 faction-invite servers, `The-Cave`, and the 9 megacorp servers) instead of every rooted host — researched and cross-checked against 3 independent sources, since backdooring most servers is a pure no-op.
-- **`faction-work-loop.ts` now releases the work slot when nothing's left to grind rep for**, instead of grinding a faction with zero payoff forever — drops `Infinity`-gap factions from its ranking and calls `ns.singularity.stopAction()` so `controller.ts` can hand the slot to `company-work-loop.ts` (money) instead.
-- **`augment-loop.ts` now donates spare money to close faction reputation gaps** via `donateToFaction`, instead of leaving it idle — closest-gap-first, skipping the player's own gang faction.
 
 See `project-state.md` for current status, decisions, and known issues in more detail.
 

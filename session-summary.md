@@ -1,3 +1,25 @@
+## Session: 2026-08-16 — BN4 cleared for real (SF4.1), replay started (BN4.2), crime-loop's fresh-BitNode-entry RAM race confirmed
+
+**Focus**: No code changes — a play/BitNode-transition session. Confirm BN4's real clear, decide the next move, and re-verify the post-restart crime fallback against a genuine fresh BitNode entry rather than just an augment-install reset.
+
+### What changed (and why)
+- No game-code changes this session (`git status` clean throughout, nothing to commit or push). All updates were to memory/docs plus routine `dev-watch` housekeeping.
+- **BN4 destroyed for real (not flumed) — SF4.1 obtained.** The automation confirmed live through 2026-08-15 (gang founding, territory warfare, NFG-gate hand-off, post-restart crime) carried the character to a genuine clear.
+- **`crime-loop.ts`'s post-restart RAM-race fallback (`a7bc3e4`, fixed 2026-08-15) re-verified against a true fresh BitNode entry** — untested before, since a BitNode entry resets home RAM to 32GB while an augment install leaves RAM/cores intact. Two `ps` snapshots (immediately after restart, then after `home-ram-loop.js`'s first 32GB→64GB purchase) confirmed the delay was a real but self-resolving RAM race, not a bug — `crime-loop.js` and 3 other `[gated ≥ 64GB]` scripts all joined the instant the threshold cleared.
+
+### Decisions
+- **Replay BN4 two more times (now in BN4.2) before moving to BN6/BN7**, per `[[bitburner_bitnode_route]]`'s researched order — staying at SF4.1 means every future BitNode pays a 16x RAM tax on this repo's entirely `ns.singularity.*`/`ns.gang.*`-based automation stack. Since the automation is already proven end-to-end, each replay should be mostly hands-off.
+
+### Issues / surprises
+- A fresh BitNode entry resets all in-playthrough state (karma, gang, augmentations) even though Source-Files persist — so the 2026-08-15 live confirmations (Territory Warfare, NFG-gate 4th fix, work-loop hand-off) are validated as *code* but need to play out again from scratch in BN4.2 before they're re-confirmed as live behavior in this instance.
+
+### Next session
+- Watch the BN4.2 karma grind reach gang creation again, then Territory Warfare/NFG-gate/backdoor-allowlist/augment-donation behavior re-play out as expected.
+- After BN4.2, one more clear needed for SF4.3.
+
+**Commits**: none (docs/memory only)
+
+---
 ## Session: 2026-08-15 — Territory Warfare power growth researched + implemented, NFG-gate 4th fix confirmed live, post-restart crime fallback fixed
 
 **Focus**: Research and implement gang power growth via territory warfare, then diagnose and fix two more live-reported bugs using the `diagnose-loop-bug` pattern.
@@ -107,30 +129,3 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 **Commits**: `be3b41e..89385e6` (5 commits)
 
 ---
-## Session: 2026-08-10 — gang-manager.js RAM starvation root-caused: reprioritized, then split into a cheap orchestrator + worker scripts
-
-**Focus**: Get `gang-manager.js` actually running again — three narrower fixes (reorder launch attempts, reserve-gate siblings, push server-purchase-manager back too) each helped but fell short, so the session ended in a real architectural fix: splitting `gang-manager.ts` into a cheap orchestrator + transient `gang-agent-*.ts` workers, mirroring `corp-manager.ts`/`corp-agent-*.ts`.
-
-### What changed (and why)
-- **Attempt 1**: reordered `controller.ts`'s launch-attempt sequence so `gang-manager.js` runs right after `crime-loop.js`, ahead of `backdoor-loop.js`/`program-buy-loop.js`/`home-cores-loop.js` (`home-ram-loop.js` kept its priority, user's explicit choice). Built clean, didn't fix it — those three were already resident from before and don't self-evict.
-- **Attempt 2**: added a `gangReserveGb` gate so those three siblings' plain `ns.run()` calls check real free RAM against gang-manager's need before launching — closed the shortfall from ~30.5GB to ~3.55GB, still short.
-- **Attempt 3**: extended the same gate to `server-purchase-manager.js`, moved to launch right after gang/hacknet/darknet. Narrowed further but still short — made clear no amount of reordering could manufacture RAM a 64GB home didn't have.
-- **The real fix**: split `gang-manager.ts` (36.10GB monolithic) into `gang-agent-status.ts` (transient, does almost every `ns.gang.*` read, writes a cached `/data/gang-state.json` report) + a rewritten `gang-manager.ts` orchestrator (pure computation over that cached report, ~3.60GB resident) + 6 new single-purpose `gang-agent-{found,recruit,ascend,assign-task,buy-equipment,warfare}.ts` action workers. Offered as one of 4 options via `AskUserQuestion` (live-eviction, split, or wait-it-out); user picked the split.
-
-### Decisions
-- Declined live-eviction (killing a resident lower-priority script to free RAM) even after two reservation-only fixes proved insufficient — avoids thrash risk, and doesn't reduce total RAM demand the way the split does. See `project-state.md`'s Recent Decisions.
-- Renamed colliding report fields (`hackSkill`, `respectForNextRecruitThreshold`) instead of the usual bracket-notation workaround — the new report type is locally-defined, so renaming is cleaner for brand-new code.
-
-### Issues / surprises
-- The RAM-analyzer's bare-property-name phantom-charge bug (`member.hack` etc.) applies just as much to plain JSON-parsed report fields as it does to live `ns.gang.*` return values — had to carry the same collision-avoidance into the new report type from scratch.
-- Confirmed live, twice: `ram-audit` predicted 3.60GB pre-sync, `mem scripts/gang-manager.js` matched exactly in-game. `ps` afterward showed every manager (gang/hacknet/darknet/server-purchase/home-ram/home-cores/program-buy/backdoor/crime) resident simultaneously alongside a full hack/grow/weaken dispatch.
-
-### Next session
-- Watch gang activity actually progress (respect/members climbing) over a longer run, via the tail's dispatch-log prints or the in-game Gang UI — not yet separately confirmed beyond the one-shot `mem`/`ps` check.
-- Continue watching the karma grind toward gang creation, per the 2026-08-09 session's still-open item.
-- See `project-state.md` for full current-state detail.
-
-**Commits**: `4731579` (1 commit)
-
----
-
