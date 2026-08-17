@@ -6,7 +6,7 @@ model: haiku
 
 # Activate Check
 
-There is no single entrypoint script that lists everything to launch. The bootstrap is a self-assembling chain: `scan-root.ts` launches `controller.ts`, which launches `hacknet-manager.ts`, which launches `rescan-loop.ts` (which loops back and re-launches `scan-root.ts` periodically). Each link is a `"scripts/....js"` string literal referenced inside the previous script. This check walks that chain from `scan-root.ts` and confirms every script it transitively reaches exists on disk, and flags any background-loop script (a `src/scripts/*.ts` file shaped like a daemon: `while (true) { ... await ns.sleep(...) ... }`) that exists but was never wired into the chain. (Bucket: Verification)
+There is no single entrypoint script that lists everything to launch. The bootstrap is a self-assembling chain: `scan-root.ts` launches `rescan-loop.ts` and `controller.ts` as siblings — `rescan-loop.ts` loops back and re-launches `scan-root.ts` periodically, while `controller.ts` separately chain-launches roughly a dozen other background managers (including `hacknet-manager.ts`). Each link is a `"scripts/....js"` string literal referenced inside the previous script. This check walks that chain from `scan-root.ts` and confirms every script it transitively reaches exists on disk, and flags any background-loop script (a `src/scripts/*.ts` file shaped like a daemon: `while (true) { ... await ns.sleep(...) ... }`) that exists but was never wired into the chain. (Bucket: Verification)
 
 ## Steps
 

@@ -4,10 +4,12 @@
 // (while(true) + ns.sleep) that exist but aren't reachable from that chain.
 //
 // The bootstrap is a self-assembling chain, not one script with a launch list:
-// scan-root.ts launches controller.ts, which launches hacknet-manager.ts, which
-// launches rescan-loop.ts (which loops back and re-launches scan-root.ts). Each
-// script references the next via a "scripts/....js" string literal. This walks
-// that chain transitively from the entrypoint.
+// scan-root.ts launches rescan-loop.ts and controller.ts as siblings -
+// rescan-loop.ts loops back and re-launches scan-root.ts, while controller.ts
+// separately chain-launches roughly a dozen other managers (including
+// hacknet-manager.ts). Each script references the next via a
+// "scripts/....js" string literal. This walks that chain transitively from
+// the entrypoint.
 //
 // Exit code: non-zero only when a script reachable from the chain is missing on
 // disk. Unwired background-loop scripts are printed as an advisory warning and

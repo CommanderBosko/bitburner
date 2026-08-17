@@ -28,7 +28,7 @@ None.
 - **Known intentional non-secrets (don't flag these):** `filesync.json`'s `port` field (12525)
   is a local dev-server port for `bitburner-filesync`, not a secret. No public keys, real IPs,
   or other secret-shaped-but-intentional values are otherwise present in this repo.
-- **Full git-history scan:** Enabled — repo is small (~250 commits), so the scan stays fast.
+- **Full git-history scan:** Enabled — repo is small, so the scan stays fast. The script prints the live commit count it scanned; don't hardcode a specific number here since it drifts every time commits are added.
 
 ## Instructions
 

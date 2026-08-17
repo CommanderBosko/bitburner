@@ -38,6 +38,8 @@ Three code shapes were found, via live in-game `mem <script>` debugging on this 
 
 Comments mentioning `ns.*` method names (even including the literal strings `"codingcontract"` or `"attempt"`) were confirmed **not** to trigger shape 1/2 — the game's analyzer correctly ignores comments. Only actual code shapes matter.
 
+**Shape 3's auto-detection is scoped to the cost table, not the full `ns.*` surface.** `extractRiskFlags()` builds its bare-property-collision scan from the names in `assets/ram-costs.json` — so it can only flag a collision with a method the table actually covers. Namespaces deliberately excluded from the table (corporation, bladeburner, sleeve, stanek, go, singularity, stock, codingcontract, infiltration, grafting, dnet) are invisible to this check even if a script has a real bare-property collision with one of them. This isn't hypothetical: `corp-manager.ts` was phantom-charged for a `hasWarehouse` field colliding with `ns.corporation.hasWarehouse()`, caught only via manual `mem` debugging, not by this tool. If a script uses one of the excluded namespaces and touches fields with the same name as one of its methods, verify manually with `mem <script>` — don't trust a clean `⚠`-free report to mean shape 3 doesn't apply.
+
 This list is almost certainly incomplete — it reflects exactly what this repo has hit and confirmed via `mem`, not a general survey of the game's analyzer. If a script's total looks implausible relative to its actual `ns.*` usage, don't assume this estimator (or the game) is simply wrong — verify with `mem <script>` and, if a new triggering shape is found, add both a fix and a new heuristic to `extractRiskFlags()` in `ram-audit.mjs` (plus a new bullet here) so future audits catch it automatically.
 
 ## Notes

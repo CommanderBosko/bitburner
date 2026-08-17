@@ -37,10 +37,10 @@ Scaffold a new single-purpose Bitburner worker script under `src/scripts/` that 
    ```
    (relative to the repo root, which is Claude's working directory — the script lives inside this skill's own directory, not under a top-level `scripts/`). Pass `--no-target` only if the user picked "No argument" in step 1. The script refuses to overwrite an existing file and validates `<name>` is kebab-case; if it exits non-zero, relay its error and fix the underlying issue (rename, or pick a different method) before retrying.
 
-4. Do **not** attempt to auto-wire the new script into `src/scripts/controller.ts`. This is a deliberate, documented exception, not an oversight: `controller.ts`'s dispatch loop is a fixed 3-branch if/else (weaken → grow → hack) implementing one specific strategy decision tree (security-down → money-up → hack), not an open-ended launch chain like the `scan-root.ts` → `controller.ts` → `hacknet-manager.ts` → `rescan-loop.ts` bootstrap. Forcing a 4th branch into `controller.ts` without knowing the intended trigger condition (when should this new script run instead of one of the other three?) would just be guessing wrong.
+4. Do **not** attempt to auto-wire the new script into `src/scripts/controller.ts`. This is a deliberate, documented exception, not an oversight: `controller.ts`'s dispatch is a fixed HWGW batch scheduler (`weaken1 → hack → grow → weaken2` per target, via `dispatchBatch`/`planHostAllocation`) implementing one specific strategy, not an open-ended launch list like the `scan-root.ts`/`rescan-loop.ts`/`controller.ts` bootstrap. Forcing a 5th worker role into that batch scheduler without knowing the intended trigger condition (when should this new script run instead of one of the existing four?) would just be guessing wrong.
 
    Instead, after creating the file, print this note to the user:
-   > Created but not wired into controller.ts — its dispatch logic is a fixed weaken/grow/hack decision tree; add a branch by hand if this script should join that rotation, or launch it directly via ns.exec/ns.run elsewhere.
+   > Created but not wired into controller.ts — its dispatch logic is a fixed HWGW batch scheduler (weaken1/hack/grow/weaken2); add a role by hand if this script should join that rotation, or launch it directly via ns.exec/ns.run elsewhere.
 
 5. Run `npm run build` from the repo root and confirm it exits 0. This repo has no test suite or linter configured — "compiles cleanly" is the verification bar per its `CLAUDE.md`.
 
