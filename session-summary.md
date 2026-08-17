@@ -1,3 +1,30 @@
+## Session: 2026-08-16 (later) — full skill-audit sweep, 3-phase fix-it pass
+
+_Older entries are in [session-summary-archive.md](session-summary-archive.md)._
+
+**Focus**: Run `/skill-audit` cold across all 14 project-local skills, then implement the findings in priority order (correctness bugs → cross-cutting de-dup → per-lens UX).
+
+### What changed (and why)
+- 5-agent parallel sweep covered all 14 skills against the standard rubric; 6 came back clean (`boot-chain`, `build-check`, `check-unlock`, `dev-watch`, `ns-cost-lookup`, `position-tail-window`).
+- **Phase 1** (`3631a2c`) — 5 correctness bugs, all verified against live output: `activate-check`/`new-worker-script` both misdescribed real boot-chain/dispatch topology; `diagnose-loop-bug`'s own hot-files list had already drifted from the memory note it cites; `secret-scan`'s commit-count claim was stale; `ram-audit` didn't document that its collision-detection is blind to excluded namespaces (the exact gap behind the earlier `corp-manager.ts`/`hasWarehouse` miss).
+- **Phase 2** (`e0160ec`) — extracted the `LAUNCH_BLOCK`/retry-constant template, previously hand-synced between `new-background-loop` and `reorder-chain-launch`, into a real shared asset (`chain-launch-block.ts`); collapsed the `ram-audit`/`ram-costs-refresh` excluded-namespace-list triplication to point at `ram-costs.json`'s `__note__`; added a real `AskUserQuestion` gate to `ram-costs-refresh`'s bulk-edit step.
+- **Phase 3** (`37c2725`) — extracted `diagnose-loop-bug`'s naming-guess-then-fallback grep into `scripts/find-decision-function.sh`, verified against a guess-hit and two guess-misses (including a newly-found one on `augment-loop.ts`); added its `## Arguments` section.
+
+### Decisions
+- Reversed a 2026-08-10 call that had scaled back the `LAUNCH_BLOCK` fix to "sync copies + comments" because a real shared asset seemed too risky given `scaffold-loop.sh`'s sed-corruption history — this time got the real de-dup by only touching comments, never the generation logic itself, then proved it safe with a live scratch-clone smoke test.
+- Deliberately left `new-background-loop/assets/loop-template.ts`'s own stale marker-comment topology unfixed — a clean fix needs the same corruption-prone sed logic touched, for a transient/self-clearing comment; not worth the risk this pass.
+
+### Issues / surprises
+- The scratch-clone smoke test briefly ran against the **real repo** instead of the clone — `scaffold-loop.sh` resolves its target root via `git rev-parse --show-toplevel` off the caller's shell cwd, not the script's own path. Caught immediately via `git status --short` before anything was staged; reverted cleanly and re-ran correctly scoped. Saved as a memory gotcha ([[bitburner_scaffold_loop_scratch_test_gotcha]]) so a future edit to this script doesn't repeat it.
+
+### Next session
+- No open skill-audit work — all findings from this sweep are resolved except the deliberately-deferred `loop-template.ts` marker text (low priority; fold into the next `scaffold-loop.sh` change that's already touching its sed logic).
+- Next full skill-audit sweep whenever more skills accumulate or enough time passes.
+
+**Commits**: `d0dc13a..37c2725` (3 commits this session: `3631a2c`, `e0160ec`, `37c2725`)
+
+---
+
 ## Session: 2026-08-16 — BN4 cleared for real (SF4.1), replay started (BN4.2), crime-loop's fresh-BitNode-entry RAM race confirmed
 
 **Focus**: No code changes — a play/BitNode-transition session. Confirm BN4's real clear, decide the next move, and re-verify the post-restart crime fallback against a genuine fresh BitNode entry rather than just an augment-install reset.
@@ -99,33 +126,5 @@
 - Continue watching the karma grind and `gang-manager.js`'s split architecture, carried over unchanged from 2026-08-10 — see `project-state.md`.
 
 **Commits**: `c09d707..0d3598f` (2 commits)
-
----
-## Session: 2026-08-10 (late) — Claude skill-infrastructure sweep: backdoor-loop safety net, skill-suggestion/skill-upgrade, 4-phase skill-audit
-
-_Older entries are in [session-summary-archive.md](session-summary-archive.md)._
-
-**Focus**: Three back-to-back tasks on the `.claude/skills/` catalog and one small game-code fix — no BitNode/gameplay change this session.
-
-### What changed (and why)
-- **`backdoor-loop.ts`**: added a `returnHome(ns, parents)` safety net called at the end of every pass, closing a gap where a mid-pass `installBackdoor()` throw (the `singularityUnavailable` branch) skipped the existing per-host return-trip and stranded the script off-`home`, breaking the next pass's path hops.
-- **`skill-suggestion`/`skill-upgrade` run**: root-caused and fixed (in the NixOS dotfiles repo, staged pending rebuild) the recurring "`find-last-skill-invocation.sh` misses slash-command invocations" Gotcha that several skills' docs already carried as a known workaround — confirmed with real transcript evidence this time, not just theorized. Also fixed `skill-upgrade`'s Step 2 (checks project-local `.claude/skills/` before assuming global) and added a global `rtk find` compound-predicate `CLAUDE.md` note. Drafted a new `resume-session` skill candidate but left it in scratchpad, undecided where it should live.
-- **Skill-audit — full 12-skill sweep**, 3 disjoint background sub-agents against the standard rubric, every finding verified empirically. 6/12 skills came back clean. Fixed in 4 phased commits: stale/bare script paths + a dead var + a stale `battlestation.ts` wiring claim (Phase 1); synced drifted chain-launch boilerplate/constants between `reorder-chain-launch` and `scaffold-loop.sh` (Phase 2); added `ns-cost-lookup`'s missing `## Arguments` section + 2 `AskUserQuestion` conversions (Phase 3); consolidated `new-background-loop`'s redundant Gotchas history (Phase 4).
-
-### Decisions
-- Scaled back Phase 2's cross-cutting "shared template" fix to syncing the two duplicate copies + cross-reference comments, not a real shared asset file — modifying `scaffold-loop.sh`'s sed-based marker insertion further was judged unnecessary risk (documented corruption history) for what was cosmetic drift, not a functional bug.
-- Left `resume-session` as a scratchpad-only draft rather than guessing where to install it (this repo vs. another project vs. global dotfiles) — needs a decision before the scratchpad is cleaned up and it's lost.
-
-### Issues / surprises
-- Confirmed empirically (not just theorized) that `find-last-skill-invocation.sh`'s slash-command blind spot is real — but the fix lives in a different repo (NixOS dotfiles) and needs a rebuild + reboot before it reaches this project's live `~/.claude`.
-- Couldn't live-test Phase 2's `scaffold-loop.sh` edit end-to-end (a scratch-clone `git clone` was permission-denied) — fell back to `bash -n` + `npm run build`, both clean; low risk since the edit was comment-only.
-- `backdoor-loop.ts` threw 3+ "old_string not found" `Edit` failures this session — added to the `[[feedback_regrep_before_edit_hot_files]]` hot-file list alongside `controller.ts`/`project-state.md`.
-
-### Next session
-- Decide where the `resume-session` skill draft belongs and move it out of scratchpad.
-- Rebuild/reboot NixOS to pick up the pending `skill-upgrade`/`find-last-skill-invocation.sh`/`rtk find` dotfiles fixes.
-- Gameplay items carried over unchanged from 2026-08-10 (gang-manager split — watch it over a longer run; karma grind toward gang creation) — see `project-state.md`.
-
-**Commits**: `be3b41e..89385e6` (5 commits)
 
 ---
