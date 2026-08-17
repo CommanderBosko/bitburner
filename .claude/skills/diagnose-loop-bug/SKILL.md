@@ -26,3 +26,7 @@ Trace an in-game symptom in a background-loop script back to the exact gating co
 8. **Commit the fix** via the `git-commit`/`commit-and-push` skill using a `fix(scriptname): description` message that names the specific gap that was closed (matching the style of prior commits like `fix(augment-loop): close rep-gating loophole in NeuroFlux Governor gate`).
 
 Report back: which script/function had the bug, the missing dimension that caused it, the fix applied, the build-check result, the in-game evidence confirming it's resolved, and the memory note written/updated.
+
+## Gotchas
+
+- **Step 2's naming-guess grep can come up empty.** `grep -n "function decide\|function should\|function canBuy\|..."` assumes the decision function follows a `decide*`/`should*`/`canBuy*`-style name — confirmed for real during this skill's own 2026-08-13 smoke test against `faction-work-loop.ts`, where the actual function was `orderFactionsByAugmentGap` and the guess grep exited 1 (no match), costing a wasted turn. When the naming-guess grep returns nothing, fall back immediately to listing every top-level function instead of retrying more name guesses: `grep -n "^function\|^async function\|export async function main" <file>`.
