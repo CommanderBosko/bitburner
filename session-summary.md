@@ -1,6 +1,35 @@
-## Session: 2026-08-16 (later) — full skill-audit sweep, 3-phase fix-it pass
+## Session: 2026-08-17/18 — NFG-gate family's 4th and 5th fixes, territory-warfare threshold override, crime-loop focus flip-flop
 
 _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
+
+**Focus**: Root-cause a recurring "grinding pointless Sector-12 rep" symptom via `diagnose-loop-bug` (twice — it had two independent causes), plus three smaller user-directed changes: gang territory-warfare's engage threshold, `crime-loop.ts`'s `focus` flag (twice), and two new custom agents.
+
+### What changed (and why)
+- **`6dca5e6`** — `augment-loop.ts`: NeuroFlux Governor made a valid donation target once nothing real is left to buy (4th fix on the NFG-gate family). Live tail had shown budget climb $901K → $1.42T over dozens of ticks with `donated=$0` throughout — money was piling up idle while the only path to close NFG's rep gap was the slow work-grind.
+- **`24d82d4`** — `faction-work-loop.ts`: excluded NFG from `orderFactionsByAugmentGap` entirely (5th fix, and the *actual* root cause) — NFG's own rep gap kept a zero-real-augs faction like Sector-12 permanently in contention as the work target, since its gap never hit `Infinity`. The 4th fix above was necessary but not sufficient; this one closed it for real. Confirmed live: Sector-12 rep flat, BitRunners (3 real augs) picked up instead, money $694.865b → $2.079t in under an hour.
+- **`e0a8ce3`** — gang-manager's territory-warfare engage/disengage hysteresis: 65%/55% → 99.5%/99% (user-directed override of the 2026-08-15 research default).
+- **`d34cdd8`** then **`3e17746`** — `crime-loop.ts`'s `commitCrime` focus flag: `false` → `true` (early-game karma grind should focus, user-directed) → back to `false` a day later (no reason given).
+- **`406ca73`** — scaffolded `loop-bug-investigator` (project-local agent, fan-out unit for `diagnose-loop-bug`) and a global `transcript-scanner` agent (NixOS repo) from a corpus-wide log-mining pass.
+- No-commit: `/dev-watch`'s `sync: running` status was a stale-PID false positive — the real `bitburner-filesync` had died and the OS recycled its PID onto `tsc -w`'s child. Fixed with a clean stop/start.
+
+### Decisions
+- Chose 99.5%/99.0% over a literal `winChance === 1` check for territory-warfare engagement, since `getChanceToWinClash()` only hits exactly 1 when a rival's power is literally zero — which won't happen while any rival holds territory.
+- Flagged `crime-loop.ts`'s `focus` flag for a 3rd-flip "ask why" rule rather than just toggling again — two content-free reversals suggests the real want is something else (situational toggle?).
+
+### Issues / surprises
+- The NFG-gate family now has 5 fixes across two files (`augment-loop.ts`, `faction-work-loop.ts`) for what looks like the same user-facing symptom each time — the 4th fix (donation eligibility) looked complete but didn't touch the actual root cause, which was one layer up in work-*target selection*, not spend eligibility.
+- `dev-watch.sh status`'s `kill -0` liveness check can false-positive after PID reuse — worth hardening if it recurs (see memory).
+
+### Next session
+- Watch territory-warfare actually engage at ~99.5% against a real rival gang.
+- Watch `augment-loop.ts`'s NFG-donation branch fire once a faction's favor crosses ~150.
+- BN4.2 already has a gang and trillions in cash — confirm `ef74360`/`c308cad` are firing if not already observed.
+
+**Commits**: `05f1053..24d82d4` (6 commits this session: `d34cdd8`, `406ca73`, `3e17746`, `e0a8ce3`, `6dca5e6`, `24d82d4`)
+
+---
+
+## Session: 2026-08-16 (later) — full skill-audit sweep, 3-phase fix-it pass
 
 **Focus**: Run `/skill-audit` cold across all 14 project-local skills, then implement the findings in priority order (correctness bugs → cross-cutting de-dup → per-lens UX).
 
@@ -100,31 +129,5 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - Continue watching the karma grind and `gang-manager.js`'s split architecture, carried over unchanged.
 
 **Commits**: `80822f4..7820769` (7 commits)
-
----
-## Session: 2026-08-11 — Augment purchaser's NFG-only bug traced past a first fix to faction-work-loop.ts's root cause; ram-audit caught 2 real bugs before push
-
-**Focus**: User reported the augment purchaser kept installing NeuroFlux Governor-only batches. A first, plausible fix (budget-sequencing) didn't resolve it; live diagnostics traced the real cause to a different script entirely and produced a bigger, correct fix.
-
-### What changed (and why)
-- **`augment-loop.ts`**: gated `buyNeuroFlux()` on a real (non-NFG) augmentation already being queued this cycle or none being obtainable at all — `buyCandidates()` already ran first each tick, but any leftover budget went straight to NFG regardless, draining cash before a pricier real augment could ever accumulate enough (`c09d707`). **This didn't fix the reported symptom** — a follow-up install screenshot still showed NFG-only.
-- Added a diagnostic `ns.print` line (`candidates=N gated=N queuedHasReal=... canBuyNfg=... budget=$N`) instead of guessing a second fix, and asked the user to paste live tail output. Result: `candidates=0 gated=60`, **$2.9B sitting completely idle**. Money was never the bottleneck — 60 real augmentations existed, unowned, blocked purely by insufficient faction reputation.
-- **`faction-work-loop.ts`** (the actual root cause): picked one faction on first success and never revisited it, so every other joined faction's reputation stayed frozen forever. Rewrote it to re-rank all joined factions every tick by reputation-gap to their nearest unowned/non-NFG augmentation (`orderFactionsByAugmentGap`) and work whichever is closest — rolls onto the next-closest faction naturally as each gap closes (`0d3598f`).
-- `ram-audit` caught two real bugs in the new code before it ever synced: `Infinity - Infinity` → `NaN` in the sort comparator, and a `??` operator tripping this repo's own confirmed phantom-RAM-charge finding. Both fixed pre-push. Added the 4 new `singularity.*` costs this needed to `ram-costs.json`.
-
-### Decisions
-- Rotate `faction-work-loop.ts` across all joined factions rather than add `donateToFaction`-based rep-buying to `augment-loop.ts` (user-directed via `AskUserQuestion`, offered as one of 3 options) — donation was flagged as a smaller/faster stopgap but a likely dead end for most of the 60 gated augments, since it's itself gated behind a per-faction favor threshold that most factions never had a chance to earn under the old sticky-target design.
-- Skipped the full `/interview` ceremony for the initial ask (well-scoped, already-diagnosed from reading the code) but escalated back to `AskUserQuestion` once the investigation revealed a genuine architectural fork (rotate vs. donate vs. both).
-
-### Issues / surprises
-- The first fix was a real improvement (it does what it claims) but solved a problem the player didn't actually have — a good reminder that "the code now does something more correct" isn't the same as "the reported symptom is gone," per the standing `[[feedback_verify_ingame_before_declaring_fixed]]` rule. The diagnostic-print-then-ask step is what actually closed the gap between the two.
-- `company-work-loop.ts` has the identical sticky-single-target pattern (`targetCompany`) — not fixed, lower-stakes since company rep doesn't gate augmentations, but flagged for later.
-- **Not yet confirmed live** — user will check tomorrow.
-
-### Next session
-- Check `faction-work-loop.js`/`augment-loop.js` tail output and the next install for confirmation the fix actually works.
-- Continue watching the karma grind and `gang-manager.js`'s split architecture, carried over unchanged from 2026-08-10 — see `project-state.md`.
-
-**Commits**: `c09d707..0d3598f` (2 commits)
 
 ---
