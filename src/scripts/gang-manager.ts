@@ -39,15 +39,19 @@ const ASCENSION_MULT_THRESHOLD = 1.75;
 // then switch them to earning tasks (per researched strategy: train/ascend in cycles until
 // ~10-20x, then earn respect/money and recruit more).
 const EARN_ASC_MULT_TARGET = 10;
-const WARFARE_ENGAGE_WIN_CHANCE = 0.65;
+// User-directed (2026-08-18): only clash when win chance is effectively 100%, not the previous
+// 65% snowball-strategy threshold - zero-risk territory gain over faster-but-lossy expansion.
+// getChanceToWinClash() = ownPower / (ownPower + rivalPower) is a continuous ratio that only
+// hits a literal 1 when rivalPower is exactly 0, which won't happen while a rival still holds
+// territory (rivals list is pre-filtered to territory > 0 - see gang-agent-status.ts) - so this
+// uses 0.995 ("rounds to 100% in the in-game UI") rather than a literal === 1 comparison, which
+// would leave territory warfare permanently off in practice.
+const WARFARE_ENGAGE_WIN_CHANCE = 0.995;
 // Hysteresis: only disengage once win chance drops meaningfully below the engage threshold,
-// so a single noisy reading doesn't flip territory warfare on/off every tick.
-const WARFARE_DISENGAGE_WIN_CHANCE = 0.55;
-// 60-65% win chance is a researched-and-verified-safe engage threshold (not just "good enough"):
-// per the game's own source (AllGangs.ts's getClashWinChance = ownPower / (ownPower +
-// rivalPower)) plus community consensus, a losing gang's power drops too, so even a modest
-// initial edge snowballs into a growing advantage over repeated clashes - no need to wait for a
-// much larger (e.g. 90%+) margin before it's worth engaging.
+// so a single noisy reading doesn't flip territory warfare on/off every tick. Kept tight (0.5pp)
+// rather than mirroring the old 10pp gap - the whole point of the 100%-only threshold is to not
+// keep clashing once the win chance is no longer overwhelming.
+const WARFARE_DISENGAGE_WIN_CHANCE = 0.99;
 const TERRITORY_WARFARE_TASK_NAME = "Territory Warfare";
 // Own territory share (0-1) above which there's nothing meaningful left to fight for.
 const TERRITORY_FULL_FRACTION = 1;
