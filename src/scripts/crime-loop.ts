@@ -25,12 +25,12 @@ export async function main(ns: NS): Promise<void> {
 		// launched, before it got to do anything.
 		try {
 			const crime = ns.singularity.getCrimeChance("Homicide") >= HOMICIDE_CHANCE_THRESHOLD ? "Homicide" : "Mug";
-			// focus=true (user-directed 2026-08-17, reverting a 2026-08-09 change to focus=false).
-			// This script only ever runs Mug/Homicide for the pre-gang karma grind (plus the brief
-			// post-restart re-grind) - the very first priority of a fresh BitNode start - so the UI
-			// jumping to the Work screen on every commitCrime call is wanted here, unlike
-			// faction-work-loop.ts/company-work-loop.ts which stay on focus=false.
-			const durationMs = ns.singularity.commitCrime(crime, true);
+			// focus=false (user-directed 2026-08-18, reverting the 2026-08-17 change back to
+			// focus=false). commitCrime must be re-called every time the previous attempt finishes,
+			// so focus=true yanks the UI to the Work screen every few seconds - disruptive again,
+			// same as the original 2026-08-09 finding. Matches faction-work-loop.ts/
+			// company-work-loop.ts, which have stayed on focus=false throughout.
+			const durationMs = ns.singularity.commitCrime(crime, false);
 			ns.print(`crime-loop: committing ${crime} (~${(durationMs / 1000).toFixed(0)}s)`);
 			await ns.sleep(durationMs + 200);
 		} catch (error) {
