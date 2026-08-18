@@ -41,11 +41,25 @@ function orderFactionsByAugmentGap(ns: NS, factions: FactionName[], owned: Set<s
 		const rep = ns.singularity.getFactionRep(faction);
 		let minGap = Infinity;
 		for (const augName of ns.singularity.getAugmentationsFromFaction(faction)) {
-			// NeuroFlux Governor is repeatable - getOwnedAugmentations lists it once regardless of
-			// how many levels have already been bought, so (unlike a real augmentation) it's never
-			// skipped via the owned check here: the rep gap toward its *next* purchase is still
-			// worth grinding for even after buying prior levels.
-			if (augName !== NEUROFLUX_NAME && owned.has(augName)) continue;
+			// NeuroFlux Governor excluded outright (2026-08-18 fix, reverting an earlier attempt
+			// that deliberately kept tracking its gap here "since it's still worth grinding for") -
+			// unlike a real augmentation, NFG's rep requirement renews every level, so a faction
+			// with zero real augmentations left (e.g. Sector-12 showing "No Augmentations left" in
+			// the UI) still produced a finite minGap from NFG alone and never dropped out of
+			// `ordered`. That pinned this faction as newTarget forever: workForFaction kept
+			// succeeding, currentWork.type stayed "FACTION" permanently, and controller.ts's
+			// decideActiveWorkScript grace-period fallback (which only reroutes to
+			// company-work-loop.js once faction work actually stops) never got a chance to fire -
+			// starving money-earning entirely for a rep-grind confirmed live to have zero payoff
+			// (that faction's favor is permanently capped below the ~150 donateToFaction threshold
+			// once it has no augmentations left to install, so augment-loop.ts's donation shortcut
+			// for NFG is a dead end there too). Matches collectCandidates' own NFG exclusion in
+			// augment-loop.ts - NFG progress is meant to come from augment-loop.ts's donation/
+			// leftover-budget spend once nothingRealLeft, not from actively working a dead faction
+			// for it. See [[bitburner_augment_loop_nfg_gate]], which recorded this exact symptom
+			// once already (2026-08-15) but only patched augment-loop.ts's spending gate, not this
+			// file's work-target selection - it resurfaced identically for that reason.
+			if (augName === NEUROFLUX_NAME || owned.has(augName)) continue;
 			const gap = ns.singularity.getAugmentationRepReq(augName) - rep;
 			if (gap > 0 && gap < minGap) minGap = gap;
 		}
