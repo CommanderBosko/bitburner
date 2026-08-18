@@ -174,27 +174,55 @@ export async function main(ns: NS): Promise<void> {
 			// uses for work targeting.
 			let gatedCount = 0;
 			let donateTarget: (Candidate & { gap: number }) | null = null;
+			// NeuroFlux Governor's own rep gap, tracked separately from gatedCount/donateTarget above -
+			// see the nothingRealLeft comment below for why it can't just be lumped in with those.
+			let nfgDonateTarget: (Candidate & { gap: number }) | null = null;
 			for (const faction of factions) {
+				if (faction === gangFaction) continue;
 				const rep = ns.singularity.getFactionRep(faction);
 				for (const augName of ns.singularity.getAugmentationsFromFaction(faction)) {
-					if (augName === NEUROFLUX_NAME || owned.has(augName)) continue;
+					if (augName !== NEUROFLUX_NAME && owned.has(augName)) continue;
 					const gap = ns.singularity.getAugmentationRepReq(augName) - rep;
 					if (gap <= 0) continue;
-					if (faction === gangFaction) continue;
+					if (augName === NEUROFLUX_NAME) {
+						if (nfgDonateTarget === null || gap < nfgDonateTarget.gap) nfgDonateTarget = { faction, name: augName, gap };
+						continue;
+					}
 					gatedCount++;
 					if (donateTarget === null || gap < donateTarget.gap) donateTarget = { faction, name: augName, gap };
 				}
 			}
 
+			// True once there's no real augmentation left to buy (candidates) or save rep toward
+			// (gatedCount) - the same "nothing real left" condition canBuyNfg below already uses to
+			// decide it's safe to spend money on NeuroFlux instead of holding budget for a pricier
+			// real augment. Reused here for the *donation* half of the pipeline too (2026-08-18 fix):
+			// NeuroFlux Governor used to be hard-excluded from ever becoming a donateTarget (see the
+			// `augName === NEUROFLUX_NAME` skip this replaced), so once nothing real remained, rep
+			// toward NFG's ever-scaling requirement could only close via faction-work-loop.js's ~30
+			// rep/sec work grind - the money-donation shortcut (repGain = amount / 1e6 * faction_rep
+			// mult, effectively instant for a multi-billion-dollar budget) sat completely unusable no
+			// matter how large the budget got. Confirmed live: budget climbed from $901k to $1.04T
+			// over 27 ticks with candidates=0 gated=0 the entire time, augment-loop never once
+			// donating - see bitburner_augment_loop_nfg_gate memory. Guarded behind nothingRealLeft
+			// (not spent unconditionally) so a real augment's donation still gets first dibs on the
+			// budget whenever one is actually gated.
+			// Explicit null check instead of `??` - see orderFactionsByAugmentGap's comment in
+			// faction-work-loop.ts for the confirmed finding that the game's own static RAM analyzer
+			// sometimes attributes a phantom RAM charge to scripts using the nullish-coalescing operator.
+			const nothingRealLeft = candidates.length === 0 && gatedCount === 0;
+			const effectiveDonateTarget = donateTarget !== null ? donateTarget : nothingRealLeft ? nfgDonateTarget : null;
+
 			const real = buyCandidates(ns, candidates, budget);
-			const donation = donateTarget !== null ? buyDonation(ns, donateTarget, player.mults.faction_rep, budget - real.spent) : { spent: 0, donatedAny: false };
+			const donation =
+				effectiveDonateTarget !== null ? buyDonation(ns, effectiveDonateTarget, player.mults.faction_rep, budget - real.spent) : { spent: 0, donatedAny: false };
 
 			// Only spend on NeuroFlux once a real augmentation is already queued (this tick's
 			// purchase above, or an earlier tick's) or there's nothing real left to save toward at
 			// all - no candidates AND nothing rep-gated either - otherwise NFG's cheap,
 			// always-affordable price drains the budget every tick before it can ever reach a
 			// pricier real augment, and installs end up NFG-only (the bug this guards against).
-			const canBuyNfg = real.purchasedAny || queuedHasReal || (candidates.length === 0 && gatedCount === 0);
+			const canBuyNfg = real.purchasedAny || queuedHasReal || nothingRealLeft;
 			const nfg = canBuyNfg ? buyNeuroFlux(ns, factions, budget - real.spent - donation.spent) : { spent: 0, purchasedAny: false };
 			// donation.donatedAny counts too, even though it isn't a purchase: buyCandidates already
 			// ran above this tick, so a donation that just closed an augmentation's rep gate hasn't
