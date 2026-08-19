@@ -1,3 +1,26 @@
+## Session: 2026-08-19 — backdoor-loop auto-completes the BitNode via w0r1d_d43m0n; BN4.2 done, BN4.3 started
+
+**Focus**: Add `w0r1d_d43m0n` to `backdoor-loop.ts`'s target list so the BitNode gets destroyed automatically once reachable, then update memory to reflect BN4.2's completion (SF4.2 obtained) and the start of BN4.3.
+
+### What changed (and why)
+- **`2c41d2f`** — `backdoor-loop.ts`: added `w0r1d_d43m0n` to `TARGET_HOSTS`. The game's own `destroyW0r1dD43m0n()` doc says the hacking route can destroy the BitNode more cheaply via a plain `installBackdoor()` call on `w0r1d_d43m0n` itself — this repo's existing comment claimed the opposite (deliberately excluded, destroyed via `ns.hack()` instead), which was wrong. The Red Pill aug requirement that route needs is already covered by the loop's existing `The-Cave` gate, so no new code path was needed — just adding the host to the existing allowlist. Corrected the stale comment in the same commit. Build-checked clean, synced live; not yet exercised (no `w0r1d_d43m0n` reachable this session).
+- Memory updates only, no further code: `[[bitburner_bn4_singularity]]`, `[[bitburner_singularity_locked]]`, `[[bitburner_bitnode_route]]`, and `MEMORY.md` all updated to reflect BN4.2 completed (SF4.2 obtained, outside-BN4 RAM multiplier 16x→4x) and BN4.3 (final clear toward SF4.3) now in progress.
+
+### Decisions
+- Used the existing generic install-backdoor-on-rooted-target loop rather than a dedicated destroy-BitNode script or a direct `destroyW0r1dD43m0n()` call — cheaper, and leaves the player on the BitVerse selection screen (no `nextBN` param on `installBackdoor`) so picking the next BitNode stays a manual choice per the researched route.
+
+### Issues / surprises
+- The repo's own `backdoor-loop.ts` comment about `w0r1d_d43m0n` turned out to be factually wrong (claimed `ns.hack()`-based destruction) — caught by reading the game's own type-definition doc comment rather than trusting the existing comment at face value.
+
+### Next session
+- Watch `backdoor-loop.ts` actually reach and backdoor `w0r1d_d43m0n` to confirm it destroys the BitNode as the docs describe — first real test whenever BN4.3 gets there.
+- BN4.2's endgame specifics (territory-warfare threshold, NFG-donation branch, backdoor-loop allowlist, pre-NFG augment donations) were never explicitly confirmed before the transition — re-watch all of them fresh in BN4.3.
+- After BN4.3 lands (SF4.3), move on to BN6+BN7 per `[[bitburner_bitnode_route]]`.
+
+**Commits**: `eef195e..2c41d2f` (1 commit this session: `2c41d2f`)
+
+---
+
 ## Session: 2026-08-17/18 — NFG-gate family's 4th and 5th fixes, territory-warfare threshold override, crime-loop focus flip-flop
 
 _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
@@ -99,35 +122,5 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - Still unverified from 2026-08-12/13: backdoor-loop allowlist (`ef74360`), augment-loop donations (`c308cad`).
 
 **Commits**: `1855448..5252847` (3 commits)
-
----
-## Session: 2026-08-12/13 — NFG-gate bug's 3rd root cause, backdoor-loop allowlist, faction work-slot release, augment-loop donations, two new skills
-
-**Focus**: A cluster of user-reported/requested fixes to the augment-loop/faction-work-loop bug family plus two new automation features, closed out by formalizing the recurring diagnosis pattern into a skill.
-
-### What changed (and why)
-- **`server-tree.ts`** (`80822f4`): shows `BACKDOORED` instead of req lvl once a host is backdoored — small user-requested display fix.
-- **`augment-loop.ts`** NFG-gate 3rd fix (`c029546`): user reported NFG-only installs recurring (level 30→47 since the 08-11 fix). `candidates.length === 0` was true both for "nothing real left" and for "a real augmentation exists but is still rep-gated" — `canBuyNfg` now also requires `gatedCount === 0`. Confirms the 08-11 rotation fix itself was working; this was an independent gap on the rep axis instead of the money axis.
-- **`backdoor-loop.ts`** (`ef74360`): now only backdoors a hardcoded 15-server allowlist (5 faction-invite servers + `The-Cave` + 9 megacorp servers) instead of every rooted host, researched and cross-checked against 3 independent sources via `/research`. Removed the now-redundant `isPrivateServer` skip logic.
-- **`faction-work-loop.ts`** (`bdec741`): user reported the loop grinding rep for a faction with nothing left to buy right after an install. `orderFactionsByAugmentGap` now drops `Infinity`-gap factions instead of still ranking them, and `main()` calls `ns.singularity.stopAction()` to release the work slot so `controller.ts`'s existing fallback can hand it to `company-work-loop.js`.
-- **`augment-loop.ts`** donations (`c308cad`): now donates spare money to close the smallest rep gap blocking a purchasable augmentation each tick, via `donateToFaction`. Caught and fixed an install-ordering bug along the way — a donation that closes a rep gate doesn't get spent until the next tick, so a donate-only tick needed to also block that tick's install.
-- **New skill `ram-costs-refresh`**: re-derives `ram-costs.json` from upstream `RamCostGenerator.ts`. Smoke-tested for real — zero drift on every existing entry, 19 real `singularity.*` gaps found and closed (several needed by the fixes above), a bug in the skill's own wording (would've proposed adding excluded `corporation.*`/`dnet.*` entries) caught and fixed mid-run.
-- **New skill `diagnose-loop-bug`**: formalizes the recurring cycle behind 6 fixes across this cluster and the 08-11 session — grep the decision function, read it fully, check every dimension the gate should cover, patch, build-check, verify in-game, record a memory note.
-
-### Decisions
-- Donation logic lives in `augment-loop.ts` (already money-aware), not `faction-work-loop.ts` — donates closest-gap-first, drops the BitNode-multiplier term (imprecision costs a tick, never a wrong outcome), uses `donateToFaction`'s own return as the favor-threshold check.
-- `backdoor-loop.ts`'s target list is a hardcoded allowlist, not dynamically derived — the qualifying set is small and fixed by game design.
-- `diagnose-loop-bug` built as its own project-local skill rather than folded into an existing one — 6 fixes with the identical shape (gate missing a dimension) cleared the reuse bar.
-- `ram-costs-refresh` scoped as Data Enrichment, unpinned model, no `scripts/` — parsing the generator's nested-object-plus-tier shape was judged too irregular to safely script with regex.
-
-### Issues / surprises
-- **None of the 4 game-code fixes from this session have been watched through a real in-game tick yet** — all compile clean and are synced, but confirmation is next session's top priority.
-- `scan-session.sh transcript` silently stopped after 2 of 12 transcripts on this close (likely a Bash-tool output-size limit on one large combined command) — the other 10, including everything covering today's fixes, had to be re-scanned by hand via targeted `jq`/`grep`. Flagged in `project-state.md`'s Known Issues in case it recurs.
-
-### Next session
-- Watch the 4 unverified fixes through a real tick (see `project-state.md` Known Issues for exact signals per fix).
-- Continue watching the karma grind and `gang-manager.js`'s split architecture, carried over unchanged.
-
-**Commits**: `80822f4..7820769` (7 commits)
 
 ---

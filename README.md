@@ -58,11 +58,11 @@ The save is currently in **BitNode 4 (Singularity)**, so `controller` also runs 
 
 ## Recent Changes
 
+- **`backdoor-loop.ts` now auto-completes the BitNode**: added `w0r1d_d43m0n` to its target allowlist, correcting a stale comment that claimed it's destroyed via `ns.hack()` — the game's own docs confirm backdooring it (via this repo's existing generic install-backdoor loop) is the cheaper hacking-route way to destroy a BitNode. Not yet exercised live. Same session: **BN4.2 confirmed complete (SF4.2 obtained)**, and BN4.3 — the third and final clear toward SF4.3 — is now underway.
 - **The recurring "grinding pointless Sector-12 rep for NeuroFlux Governor" symptom got its 4th and 5th fixes, the second one live-confirmed as the real root cause** — `augment-loop.ts` first gained an NFG-donation path (so idle money could close NFG's rep gap instead of only the slow work-grind), but the actual bug was one layer up: `faction-work-loop.ts`'s work-target ranking never excluded NFG's own ever-renewing gap, so a faction with zero real augmentations left stayed the permanent work target regardless. Excluding NFG from that ranking (matching `augment-loop.ts`'s own exclusion) fixed it for real — confirmed live via a faction switch and resumed money growth.
 - **Gang territory-warfare's engage/disengage threshold tightened from 65%/55% to 99.5%/99%** (user-directed) — the gang now only clashes at an effectively-guaranteed win rather than accepting the researched "60-65% is enough, wins snowball" default; not yet observed live against a real rival.
 - **`crime-loop.ts`'s `focus` flag flip-flopped twice** — briefly set back to `true` so the early-game Mug→Homicide karma grind jumps the UI to the Work screen (matches the state before the game's own BN4 automation stack), then reverted to `false` a day later once the disruption wasn't worth it. `faction-work-loop.ts`/`company-work-loop.ts` were untouched throughout.
 - **New: `loop-bug-investigator` project-local agent and a global `transcript-scanner` agent**, scaffolded from a log-mining pass over this project's own session history — both are read-only fan-out units for mining/diagnosing background-loop bugs and session transcripts respectively.
-- **Full audit sweep of the `.claude/skills/` catalog** (previous session) — all 14 project-local skills checked against a quality rubric, 5 correctness bugs fixed, plus two cross-cutting duplications de-duplicated into shared config/assets. No game-code changes.
 
 See `project-state.md` for current status, decisions, and known issues in more detail.
 
