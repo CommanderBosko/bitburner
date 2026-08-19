@@ -18,9 +18,16 @@ const TARGET_HOSTS = new Set<string>([
 	"run4theh111z", // BitRunners
 	"fulcrumassets", // Fulcrum Secret Technologies (alongside 400k rep)
 	// Endgame gate: backdooring The-Cave (itself gated behind the Red Pill aug + 925 hacking) is
-	// required to reach w0r1d_d43m0n. w0r1d_d43m0n is deliberately NOT in this list - it's destroyed
-	// via ns.hack(), not installBackdoor().
+	// required to reach w0r1d_d43m0n.
 	"The-Cave",
+	// The actual BitNode-completion trigger. Per NetscriptDefinitions.d.ts's own doc on
+	// destroyW0r1dD43m0n(): "with the hacking route, using installBackdoor is a cheaper way to do
+	// this" - i.e. backdooring w0r1d_d43m0n (not ns.hack()) destroys the BitNode once hacking level
+	// is high enough to root it, with the Red Pill aug requirement already covered by The-Cave gate
+	// above. Left at the BitVerse selection screen (installBackdoor has no nextBN param) rather than
+	// auto-flumed, so the researched BN route (see bitburner_bitnode_route memory) stays a manual
+	// choice.
+	"w0r1d_d43m0n",
 	// Megacorp servers - backdoor is optional but cuts that company faction's required reputation
 	// 400k -> 300k (25%), confirmed in bitburner-official docs.
 	"ecorp", // ECorp
