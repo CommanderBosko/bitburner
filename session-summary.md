@@ -1,3 +1,27 @@
+## Session: 2026-08-20 — karma.ts gets a live HUD tail window; redundant tprint prefix dropped
+
+**Focus**: Two small polish fixes, no BitNode progress — replace `karma.ts`'s one-shot karma print with a live HUD (karma + karma/minute), and drop a doubled-up `tprint` prefix in `gang-agent-found.ts`.
+
+### What changed (and why)
+- **`17cbd5f`** — `karma.ts`: replaced the one-shot `ns.tprint` of current karma with a persistent tail window (`ns.ui.openTail`/`resizeTail`/`moveTail`, following `battlestation.ts`'s existing pattern), showing current karma and karma/minute. Started at a 60s refresh, then tightened to 5s in the same session on request — the rate formula (`(karma - startKarma) / elapsedMinutesSinceStart`) is anchored to script-start time, not a per-poll delta, so the faster refresh only makes the karma number fresher without adding jitter to the rate.
+- **`676046f`** — `gang-agent-found.ts`: dropped the manual `gang-agent-found: ` prefix from its `ns.tprint` call — Bitburner already prepends the calling script's filename to `tprint` output, so the printout was doubling up. Confirmed it was the only self-prefixing `tprint` call in the repo; left the sibling `ns.print` (tail-window output, no auto-prefix) alone.
+- Aside, unrelated to this repo: also root-caused and fixed a global Claude Code annoyance (Remote Control auto-enabling every session start) by setting `remoteControlAtStartup: false` in `~/.claude/settings.json` — outside version control, no bitburner commit.
+
+### Decisions
+- Kept the karma rate keyed to script-start time rather than a rolling per-poll delta, specifically so refresh-interval tuning (60s → 5s) is free to change independently of rate smoothness.
+- Skipped the full `/interview` ceremony for the karma HUD ask — a single, already-scoped request with an existing pattern (`battlestation.ts`) to follow and an obvious success criterion.
+
+### Issues / surprises
+- None — both fixes were straightforward, confirmed via `build-check`'s compile + sync-log verification.
+
+### Next session
+- Confirm `karma.ts`'s new tail window actually lands top-left as sized (300×120) — not yet visually checked in-game.
+- BN4.3 items carried forward unchanged from the 2026-08-19 close below (backdoor-loop `w0r1d_d43m0n` trigger, territory-warfare threshold, NFG-donation branch — all still unconfirmed live).
+
+**Commits**: `9e15d50..676046f` (2 commits this session: `17cbd5f`, `676046f`)
+
+---
+
 ## Session: 2026-08-19 — backdoor-loop auto-completes the BitNode via w0r1d_d43m0n; BN4.2 done, BN4.3 started
 
 **Focus**: Add `w0r1d_d43m0n` to `backdoor-loop.ts`'s target list so the BitNode gets destroyed automatically once reachable, then update memory to reflect BN4.2's completion (SF4.2 obtained) and the start of BN4.3.
@@ -97,30 +121,5 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - After BN4.2, one more clear needed for SF4.3.
 
 **Commits**: none (docs/memory only)
-
----
-## Session: 2026-08-15 — Territory Warfare power growth researched + implemented, NFG-gate 4th fix confirmed live, post-restart crime fallback fixed
-
-**Focus**: Research and implement gang power growth via territory warfare, then diagnose and fix two more live-reported bugs using the `diagnose-loop-bug` pattern.
-
-### What changed (and why)
-- **`gang-manager.ts`** (`5252847`): researched territory warfare mechanics via `/research` (10 agents against the game's own TypeScript source) — power only grows from members on the "Territory Warfare" task, risk-free while clash engagement stays off. The existing 65%/55% engage/disengage hysteresis was dead code because nothing ever assigned that task. `computeTaskAssignments` now dedicates trained members to it once respect is capped.
-- **`augment-loop.ts`** (`1855448`): 4th fix on the NFG gate — gang-locked augmentations (can't be donated to or worked for) were still incrementing `gatedCount` even though excluded from `donateTarget`, permanently blocking NFG purchases. Moved the exclusion earlier. **Confirmed live**: the full faction→company→faction hand-off chain worked end-to-end.
-- **`controller.ts`/`crime-loop.ts`** (`a7bc3e4`): fixed a post-restart idle bug — crime could never be selected once a gang exists, and `crime-loop.ts`'s self-stop guard would've killed it anyway. Added a 3-minute post-restart grace window; removed the guard. **Confirmed live.**
-
-### Decisions
-- Territory Warfare thresholds left at the existing 65%/55% — already within the researched-safe 60-65% win-chance range.
-- `crime-loop.ts`'s self-stop guard removed entirely rather than reordered — `controller.ts` is now the sole authority over all three work-loop scripts, matching its siblings.
-- Post-restart crime fallback keyed off `CONTROLLER_STARTED_AT` (set fresh on every controller process start) rather than a stat-recovery threshold — simpler and free.
-
-### Issues / surprises
-- A screenshot showing the character working ECorp instead of grinding Daedalus rep looked like a new bug but turned out to be the crime/company/faction hand-off chain working exactly as designed — worth double-checking against intended behavior before assuming a regression.
-- Territory Warfare (`5252847`) is the one change from this session **not yet observed live** — needs a real tick to confirm task assignment and win-chance climb.
-
-### Next session
-- Watch `gang-manager.js` tail for `-> Territory Warfare` assignments and climbing win chance.
-- Still unverified from 2026-08-12/13: backdoor-loop allowlist (`ef74360`), augment-loop donations (`c308cad`).
-
-**Commits**: `1855448..5252847` (3 commits)
 
 ---
