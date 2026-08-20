@@ -15,6 +15,6 @@ export async function main(ns: NS): Promise<void> {
 	}
 
 	if (ns.gang.createGang(GANG_FACTION)) {
-		ns.tprint(`gang-agent-found: created gang with ${GANG_FACTION}`);
+		ns.tprint(`created gang with ${GANG_FACTION}`);
 	}
 }
