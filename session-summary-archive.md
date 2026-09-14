@@ -1,3 +1,27 @@
+## Session: 2026-08-20 — karma.ts gets a live HUD tail window; redundant tprint prefix dropped
+
+**Focus**: Two small polish fixes, no BitNode progress — replace `karma.ts`'s one-shot karma print with a live HUD (karma + karma/minute), and drop a doubled-up `tprint` prefix in `gang-agent-found.ts`.
+
+### What changed (and why)
+- **`17cbd5f`** — `karma.ts`: replaced the one-shot `ns.tprint` of current karma with a persistent tail window (`ns.ui.openTail`/`resizeTail`/`moveTail`, following `battlestation.ts`'s existing pattern), showing current karma and karma/minute. Started at a 60s refresh, then tightened to 5s in the same session on request — the rate formula (`(karma - startKarma) / elapsedMinutesSinceStart`) is anchored to script-start time, not a per-poll delta, so the faster refresh only makes the karma number fresher without adding jitter to the rate.
+- **`676046f`** — `gang-agent-found.ts`: dropped the manual `gang-agent-found: ` prefix from its `ns.tprint` call — Bitburner already prepends the calling script's filename to `tprint` output, so the printout was doubling up. Confirmed it was the only self-prefixing `tprint` call in the repo; left the sibling `ns.print` (tail-window output, no auto-prefix) alone.
+- Aside, unrelated to this repo: also root-caused and fixed a global Claude Code annoyance (Remote Control auto-enabling every session start) by setting `remoteControlAtStartup: false` in `~/.claude/settings.json` — outside version control, no bitburner commit.
+
+### Decisions
+- Kept the karma rate keyed to script-start time rather than a rolling per-poll delta, specifically so refresh-interval tuning (60s → 5s) is free to change independently of rate smoothness.
+- Skipped the full `/interview` ceremony for the karma HUD ask — a single, already-scoped request with an existing pattern (`battlestation.ts`) to follow and an obvious success criterion.
+
+### Issues / surprises
+- None — both fixes were straightforward, confirmed via `build-check`'s compile + sync-log verification.
+
+### Next session
+- Confirm `karma.ts`'s new tail window actually lands top-left as sized (300×120) — not yet visually checked in-game.
+- BN4.3 items carried forward unchanged from the 2026-08-19 close below (backdoor-loop `w0r1d_d43m0n` trigger, territory-warfare threshold, NFG-donation branch — all still unconfirmed live).
+
+**Commits**: `9e15d50..676046f` (2 commits this session: `17cbd5f`, `676046f`)
+
+---
+
 ## Session: 2026-08-19 — backdoor-loop auto-completes the BitNode via w0r1d_d43m0n; BN4.2 done, BN4.3 started
 
 **Focus**: Add `w0r1d_d43m0n` to `backdoor-loop.ts`'s target list so the BitNode gets destroyed automatically once reachable, then update memory to reflect BN4.2's completion (SF4.2 obtained) and the start of BN4.3.

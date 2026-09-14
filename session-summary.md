@@ -1,3 +1,29 @@
+## Session: 2026-09-13 — Bladeburner work-slot priority bug found and fixed; a deeper eviction bug found but left open
+
+**Focus**: User reported never seeing Bladeburner activities happen in-game; diagnose via `diagnose-loop-bug` and fix the root cause in `controller.ts`'s work-slot scheduler.
+
+### What changed (and why)
+- Diagnosed and fixed a real scheduling bug in `decideActiveWorkScript` (`controller.ts`): the Faction branch was the only one of the three work-slot legs (Crime/Bladeburner-training aside) with no periodic reverse-probe of its own — Company and Bladeburner both already handed back to Faction every `FACTION_PROBE_INTERVAL_MS` (5 min) regardless of their own productivity, but nothing forced Faction to ever yield to Bladeburner short of `workingForFaction` flipping false, which `faction-work-loop.ts`'s NFG-excluded-but-otherwise-permissive ranking made close to permanently true. Added the same periodic handoff, aimed at Bladeburner.
+- Live-verified via `ps`/tail across several rounds with the user: the fix works — Bladeburner did get the slot and start a real action (confirmed by the game's own "Bladeburner action was cancelled" toast marking the handoff). But it then got evicted back to Company within ~90s. Ruled out both known `desiredGeneralAction` triggers (stamina 81.7/81.7, chaos 5.6 — both fine) and confirmed a 100%-success Tracking contract (1.96k remaining) was trivially available, so the "General" reading `isBladeburnerProductive` acted on remains unexplained.
+- Added per-tick decision logging to `bladeburner-manager.ts` (`desired=`/`current=`/`alreadyDoing=`/stamina/chaos/rank) so the next active window is directly observable via `tail` instead of guessing a third time — this file was the one orchestrator in the family without this convention.
+
+### Decisions
+- Treated the 2026-09-12 memory note ("Faction strictly preempts Bladeburner, no periodic reverse-probe exists — correct behavior") as having been the bug description, not a clean bill of health, once the user's live report contradicted it.
+- Chased the "still not working after the scheduling fix" symptom with real live data (ps snapshots, Bladeburner UI contract screenshot, stamina/chaos readout) at each step rather than a second speculative patch — same discipline as `[[feedback_verify_ingame_before_declaring_fixed]]`.
+- Left the actual eviction root cause unpatched rather than guess a third time — added observability instead (see above).
+
+### Issues / surprises
+- Two `ps` snapshots mid-session showed a full script-environment reset (worker PIDs collapsed from ~40-60k down to 171-173) consistent with an `augment-loop.ts`-triggered `installAugmentations()` soft reset — raised as a possible compounding cause (in-memory `activeWorkScript`/`lastWorkTransitionAt` reset on every controller.js restart) but a follow-up tail showed no install had actually fired during the relevant window, so it was set aside as unconfirmed rather than fixed speculatively.
+- `isBladeburnerProductive` (`controller.ts`) never checks `report.writtenAt` staleness at all, unlike every other cached-report read in this codebase's `isStale` convention — flagged as worth checking next session, not yet confirmed as the actual cause.
+
+### Next session
+- **Catch `bladeburner-manager.js`'s tail during its next active window** (~5-10 min after Company last took the slot) and report the `desired=`/`current=` lines — this is the concrete next step to close out the eviction bug.
+- Everything else carried over from the 2026-08-30 entries below is unchanged by this session.
+
+**Commits**: `72c9866` (1 commit: the Faction-branch scheduling fix + diagnostic-logging addition + doc refresh)
+
+---
+
 ## Session: 2026-08-30 (later) — manager agent's first real-world /improve-system delegation, merged as PR #1
 
 **Focus**: Test the `manager` agent's ability to run a full `/improve-system` sweep unattended (no mid-run `AskUserQuestion`), land it via branch+PR, and have the user review and merge.
@@ -122,30 +148,6 @@ _Older entries are in [session-summary-archive.md](session-summary-archive.md)._
 - BN4.3 items carried forward unchanged (karma HUD window position, backdoor-loop `w0r1d_d43m0n` trigger, territory-warfare threshold, NFG-donation branch — all still unconfirmed live).
 
 **Commits**: `0bcabd8..c8fc5ab` (1 commit this session: `c8fc5ab`)
-
----
-
-## Session: 2026-08-20 — karma.ts gets a live HUD tail window; redundant tprint prefix dropped
-
-**Focus**: Two small polish fixes, no BitNode progress — replace `karma.ts`'s one-shot karma print with a live HUD (karma + karma/minute), and drop a doubled-up `tprint` prefix in `gang-agent-found.ts`.
-
-### What changed (and why)
-- **`17cbd5f`** — `karma.ts`: replaced the one-shot `ns.tprint` of current karma with a persistent tail window (`ns.ui.openTail`/`resizeTail`/`moveTail`, following `battlestation.ts`'s existing pattern), showing current karma and karma/minute. Started at a 60s refresh, then tightened to 5s in the same session on request — the rate formula (`(karma - startKarma) / elapsedMinutesSinceStart`) is anchored to script-start time, not a per-poll delta, so the faster refresh only makes the karma number fresher without adding jitter to the rate.
-- **`676046f`** — `gang-agent-found.ts`: dropped the manual `gang-agent-found: ` prefix from its `ns.tprint` call — Bitburner already prepends the calling script's filename to `tprint` output, so the printout was doubling up. Confirmed it was the only self-prefixing `tprint` call in the repo; left the sibling `ns.print` (tail-window output, no auto-prefix) alone.
-- Aside, unrelated to this repo: also root-caused and fixed a global Claude Code annoyance (Remote Control auto-enabling every session start) by setting `remoteControlAtStartup: false` in `~/.claude/settings.json` — outside version control, no bitburner commit.
-
-### Decisions
-- Kept the karma rate keyed to script-start time rather than a rolling per-poll delta, specifically so refresh-interval tuning (60s → 5s) is free to change independently of rate smoothness.
-- Skipped the full `/interview` ceremony for the karma HUD ask — a single, already-scoped request with an existing pattern (`battlestation.ts`) to follow and an obvious success criterion.
-
-### Issues / surprises
-- None — both fixes were straightforward, confirmed via `build-check`'s compile + sync-log verification.
-
-### Next session
-- Confirm `karma.ts`'s new tail window actually lands top-left as sized (300×120) — not yet visually checked in-game.
-- BN4.3 items carried forward unchanged from the 2026-08-19 close below (backdoor-loop `w0r1d_d43m0n` trigger, territory-warfare threshold, NFG-donation branch — all still unconfirmed live).
-
-**Commits**: `9e15d50..676046f` (2 commits this session: `17cbd5f`, `676046f`)
 
 ---
 

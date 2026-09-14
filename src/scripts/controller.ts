@@ -299,18 +299,34 @@ function decideActiveWorkScript(ns: NS): string {
 		return BLADEBURNER_LOOP_SCRIPT;
 	}
 
-	if (activeWorkScript === FACTION_WORK_LOOP_SCRIPT && now - lastWorkTransitionAt > FACTION_GRACE_MS) {
-		try {
-			const currentWork = ns.singularity.getCurrentWork();
-			const workingForFaction = currentWork !== null && currentWork.type === "FACTION";
-			if (!workingForFaction) return BLADEBURNER_LOOP_SCRIPT;
-		} catch {
-			// Singularity unavailable - can't tell if faction work is actually happening; keep
-			// trying faction rather than assume failure.
+	if (activeWorkScript === FACTION_WORK_LOOP_SCRIPT) {
+		// Unlike the two branches above, this leg previously had no periodic reverse-probe of its
+		// own - the only way off Faction was workingForFaction flipping false below. But
+		// faction-work-loop.ts's orderFactionsByAugmentGap keeps a faction in play as long as it has
+		// ANY unowned aug (NFG excluded) with an unmet rep gap, which for a save still
+		// mid-progression across dozens of factions is close to permanently true - so that never
+		// happened in practice and Bladeburner never got a turn at all. Confirmed live 2026-09-13:
+		// bladeburner-manager.js never observed running despite combat stats having been ready for a
+		// while (the 2026-09-12 note calling this "correct behavior, no periodic reverse-probe
+		// exists" was the bug description, not a clean bill of health). Mirror the
+		// FACTION_PROBE_INTERVAL_MS handoff the Company/Bladeburner branches already give Faction,
+		// aimed the other way, so Bladeburner periodically gets a real shot regardless of Faction's
+		// own reported productivity.
+		if (now - lastWorkTransitionAt > FACTION_PROBE_INTERVAL_MS) return BLADEBURNER_LOOP_SCRIPT;
+		if (now - lastWorkTransitionAt > FACTION_GRACE_MS) {
+			try {
+				const currentWork = ns.singularity.getCurrentWork();
+				const workingForFaction = currentWork !== null && currentWork.type === "FACTION";
+				if (!workingForFaction) return BLADEBURNER_LOOP_SCRIPT;
+			} catch {
+				// Singularity unavailable - can't tell if faction work is actually happening; keep
+				// trying faction rather than assume failure.
+			}
 		}
+		return FACTION_WORK_LOOP_SCRIPT;
 	}
 
-	return FACTION_WORK_LOOP_SCRIPT; // default first try / still within grace / confirmed working
+	return FACTION_WORK_LOOP_SCRIPT; // default first pick when no work-loop script has been chosen yet
 }
 // CORP_MANAGER_SCRIPT/CORP_WORKER_SCRIPTS/CORP_RAM_RESERVE_FRACTION: PAUSED (2026-08-06) along
 // with computeCorpReserveGb and the corp-manager.js launch block below - commented out (not

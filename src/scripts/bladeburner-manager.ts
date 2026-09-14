@@ -163,6 +163,15 @@ export async function main(ns: NS): Promise<void> {
 
 		const desired = desiredAction(report);
 		const alreadyDoing = report.currentAction !== null && report.currentAction.type === desired.type && report.currentAction.name === desired.name;
+		// Diagnostic added 2026-09-13 while chasing [[bitburner_bn67_bladeburner]]'s "never seen
+		// running" symptom - every sibling orchestrator (faction-work-loop.ts's "ordered=...",
+		// augment-loop.ts's "candidates=...") prints its own per-tick decision; this one never had
+		// an equivalent, which made isBladeburnerProductive's controller.ts-side eviction unverifiable
+		// from outside. Kept permanently, not stripped after the bug hunt - matches the sibling
+		// convention and costs nothing (ns.print is already referenced by every orchestrator here).
+		ns.print(
+			`bladeburner-manager: desired=${desired.type}/${desired.name} current=${report.currentAction ? `${report.currentAction.type}/${report.currentAction.name}` : "(none)"} alreadyDoing=${alreadyDoing} stamina=${report.staminaCurrent.toFixed(0)}/${report.staminaMax.toFixed(0)} chaos=${report.cityChaos.toFixed(1)} rank=${report.rank.toFixed(0)}`,
+		);
 		if (!alreadyDoing) {
 			if (dispatchOnce(ns, "bladeburner-manager", BLADEBURNER_AGENT_START_ACTION_SCRIPT, desired.type, desired.name)) acted = true;
 		}
